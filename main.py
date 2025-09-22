@@ -52,7 +52,7 @@ DOCUMENT_TITLES = {
 # --- НАЛАШТУВАННЯ ---
 VECTORSTORE_PATH = "chroma_db"
 LLM_MODEL_MAIN = "gpt-4o"
-LLM_MODEL_MULTI_QUERY = "gpt-4o-mini" # Швидка модель для генерації запитів
+LLM_MODEL_CLASSIFY_AND_QUERY = "gpt-4o-mini" # Швидка модель для генерації запитів
 
 # --- ЗАВАНТАЖЕННЯ БАЗИ ЗНАНЬ ---
 print("Завантаження векторної бази знань Chroma...")

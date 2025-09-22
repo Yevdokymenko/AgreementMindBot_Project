@@ -52,7 +52,7 @@ DOCUMENT_TITLES = {
 # --- НАЛАШТУВАННЯ ---
 VECTORSTORE_PATH = "chroma_db"
 LLM_MODEL_MAIN = "gpt-4o"
-LLM_MODEL_CLASSIFY_AND_QUERY = "gpt-4o-mini" # Швидка модель для генерації запитів
+LLM_MODEL_MULTI_QUERY = "gpt-4o-mini" # Швидка модель для генерації запитів
 
 # --- ЗАВАНТАЖЕННЯ БАЗИ ЗНАНЬ ---
 print("Завантаження векторної бази знань Chroma...")
@@ -87,7 +87,7 @@ classifier_prompt_template = """
 Твоя відповідь (тільки 'relevant' або 'irrelevant'):
 """
 CLASSIFIER_PROMPT = PromptTemplate.from_template(classifier_prompt_template)
-classifier_llm = ChatOpenAI(model_name=LLM_MODEL_CLASSIFY_AND_QUERY, temperature=0)
+classifier_llm = ChatOpenAI(model_name=LLM_MODEL_MULTI_QUERY, temperature=0)
 classifier_chain = LLMChain(llm=classifier_llm, prompt=CLASSIFIER_PROMPT)
 
 # --- ПРОМПТ ДЛЯ ГЕНЕРАЦІЇ ВІДПОВІДІ (КРОК 2) ---

@@ -56,7 +56,7 @@ vectorstore = Chroma(
     persist_directory=VECTORSTORE_PATH, 
     embedding_function=OpenAIEmbeddings()
 )
-retriever = vector_store.as_retriever(search_kwargs={"k": 20}) # Шукаємо 20 маленьких фрагментів
+retriever = vectorstore.as_retriever(search_kwargs={"k": 20}) # Шукаємо 20 маленьких фрагментів
 print("База знань завантажена.")
 
 # --- ФІНАЛЬНИЙ, УНІВЕРСАЛЬНИЙ ПРОМПТ ---

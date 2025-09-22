@@ -1,46 +1,67 @@
 import os
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.retrievers import ParentDocumentRetriever
+from langchain.storage import InMemoryStore
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
-from langchain_community.vectorstores import FAISS
+from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from dotenv import load_dotenv
+
 load_dotenv()
 
-
 DOCUMENTS_PATH = "documents"
-INDEX_PATH = "faiss_index"
+VECTORSTORE_PATH = "chroma_db"
 
-def create_vector_store():
-    print("Починаю обробку документів...")
-    documents = []
+def create_retriever():
+    print("Починаю обробку документів для створення просунутого ретривера...")
+    
+    # Завантажуємо всі документи
+    all_docs = []
     for file in os.listdir(DOCUMENTS_PATH):
         file_path = os.path.join(DOCUMENTS_PATH, file)
         try:
             if file.endswith(".pdf"):
                 loader = PyPDFLoader(file_path)
-                documents.extend(loader.load())
-                print(f"Обробляю PDF: {file}")
             elif file.endswith(".docx"):
                 loader = Docx2txtLoader(file_path)
-                documents.extend(loader.load())
-                print(f"Обробляю DOCX: {file}")
+            else:
+                continue # Пропускаємо файли інших типів
+            
+            print(f"Завантажую: {file}")
+            all_docs.extend(loader.load())
         except Exception as e:
             print(f"Помилка при обробці файлу {file}: {e}")
 
-    if not documents:
+    if not all_docs:
         print("Документи не знайдено. Перевірте папку 'documents'.")
         return
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    split_texts = text_splitter.split_documents(documents)
+    # "Батьківський" спліттер, який створює великі документи
+    parent_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
+    # "Дитячий" спліттер, який створює маленькі фрагменти для точного пошуку
+    child_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=100)
     
-    print("Створюю векторні представлення (embeddings)... Це може зайняти час.")
-    embeddings = OpenAIEmbeddings()
-    vector_store = FAISS.from_documents(split_texts, embeddings)
+    # Створюємо векторне сховище (Chroma) та сховище для документів (InMemoryStore)
+    vectorstore = Chroma(
+        collection_name="full_documents",
+        embedding_function=OpenAIEmbeddings(),
+        persist_directory=VECTORSTORE_PATH # Вказуємо папку для збереження
+    )
+    store = InMemoryStore()
+
+    # Створюємо сам ParentDocumentRetriever
+    retriever = ParentDocumentRetriever(
+        vectorstore=vectorstore,
+        docstore=store,
+        child_splitter=child_splitter,
+        parent_splitter=parent_splitter,
+    )
+
+    print("Додаю документи до ретривера... Це може зайняти значний час.")
+    # Додаємо документи. Цей процес автоматично розіб'є їх на батьківські та дочірні частини.
+    retriever.add_documents(all_docs, ids=None)
     
-    print(f"Зберігаю індекс у папку: {INDEX_PATH}")
-    vector_store.save_local(INDEX_PATH)
-    print("Готово! База знань створена.")
+    print(f"База знань успішно створена та збережена у папці: {VECTORSTORE_PATH}")
 
 if __name__ == "__main__":
-    create_vector_store()
+    create_retriever()

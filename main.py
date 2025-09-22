@@ -2,7 +2,7 @@ import os
 from fastapi import FastAPI
 from pydantic import BaseModel
 from langchain_openai import ChatOpenAI
-from langchain_community.vectorstores import FAISS
+from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
@@ -10,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import traceback
 
-# Завантажуємо змінні середовища з файлу .env
 load_dotenv()
 
 # --- Словник для перетворення назв файлів на офіційні назви угод ---
@@ -46,13 +45,18 @@ DOCUMENT_TITLES = {
 }
 
 # --- Налаштування ---
-INDEX_PATH = "faiss_index"
-LLM_MODEL = "gpt-4o" # Використовуємо новішу і розумнішу модель
+VECTORSTORE_PATH = "chroma_db"
+LLM_MODEL = "gpt-4o"
 
-# --- Завантаження бази знань ---
+# --- Завантаження НОВОЇ бази знань (Chroma) ---
+print("Завантаження векторної бази знань Chroma...")
 embeddings = OpenAIEmbeddings()
-vector_store = FAISS.load_local(INDEX_PATH, embeddings, allow_dangerous_deserialization=True)
-retriever = vector_store.as_retriever(search_kwargs={"k": 10}) # Збільшили до 10
+vector_store = Chroma(
+    persist_directory=VECTORSTORE_PATH, 
+    embedding_function=embeddings
+)
+retriever = vector_store.as_retriever(search_kwargs={"k": 20}) # Тепер ми можемо шукати більше фрагментів, бо вони маленькі
+print("База знань завантажена.")
 
 # --- Створення основного промпту ---
 main_prompt_template = """
@@ -94,7 +98,8 @@ relevance_check_prompt_template = """
 """
 
 # --- Створення ланцюгів для ШІ ---
-llm = ChatOpenAI(model_name=LLM_MODEL, temperature=0)
+# --- Створення ланцюгів для ШІ ---
+llm = ChatOpenAI(model_name=LLM_MODEL, temperature=0.1)
 
 MAIN_PROMPT = PromptTemplate(template=main_prompt_template, input_variables=["context", "question"])
 main_chain = LLMChain(llm=llm, prompt=MAIN_PROMPT)

@@ -8,6 +8,12 @@ from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from langchain.retrievers.multi_query import MultiQueryRetriever
+import logging
+
+# Налаштування логування для кращого дебагінгу
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("langchain.retrievers.multi_query").setLevel(logging.INFO)
 
 load_dotenv()
 
@@ -46,29 +52,31 @@ DOCUMENT_TITLES = {
 # --- НАЛАШТУВАННЯ ---
 VECTORSTORE_PATH = "chroma_db"
 LLM_MODEL_MAIN = "gpt-4o"
-LLM_MODEL_CLASSIFY = "gpt-3.5-turbo"
+LLM_MODEL_MULTI_QUERY = "gpt-4o-mini" # Швидка модель для генерації запитів
 
 # --- ЗАВАНТАЖЕННЯ БАЗИ ЗНАНЬ ---
 print("Завантаження векторної бази знань Chroma...")
 embeddings = OpenAIEmbeddings()
 vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
-# ЗБІЛЬШУЄМО КІЛЬКІСТЬ ФРАГМЕНТІВ ДО 35, ЩОБ ОХОПИТИ ВСІ ДОКУМЕНТИ
-retriever = vectorstore.as_retriever(search_kwargs={"k": 35})
 print("База знань завантажена.")
 
-# --- ПРОМПТ ДЛЯ КЛАСИФІКАЦІЇ ПИТАНЬ (КРОК 1) ---
-classifier_prompt_template = """
-Проаналізуй питання користувача. Твоя задача - класифікувати його.
-Якщо питання стосується безпекових угод, політики, військової допомоги, міжнародних відносин України, відповідай ТІЛЬКИ одним словом: 'relevant'.
-Якщо питання є загальним, побутовим, не пов'язаним з темою (наприклад, "як справи?", "яка погода?", "розкажи анекдот"), відповідай ТІЛЬКИ одним словом: 'irrelevant'.
+# --- СТВОРЕННЯ MultiQueryRetriever (КРОК 1) ---
+# Промпт для генерації альтернативних запитів
+QUERY_PROMPT = PromptTemplate(
+    input_variables=["question"],
+    template="""You are an AI language model assistant. Your task is to generate five 
+    different versions of the given user question to retrieve relevant documents from a vector 
+    database. By generating multiple perspectives on the user question, your goal is to help
+    the user overcome some of the limitations of distance-based similarity search. 
+    Provide these alternative questions separated by newlines.
+    Original question: {question}""",
+)
 
-Питання користувача: "{question}"
-Твоя відповідь (тільки 'relevant' або 'irrelevant'):
-"""
-CLASSIFIER_PROMPT = PromptTemplate.from_template(classifier_prompt_template)
-classifier_llm = ChatOpenAI(model_name=LLM_MODEL_CLASSIFY, temperature=0)
-classifier_chain = LLMChain(llm=classifier_llm, prompt=CLASSIFIER_PROMPT)
-
+retriever_from_llm = MultiQueryRetriever.from_llm(
+    retriever=vectorstore.as_retriever(search_kwargs={"k": 20}), # Кожен з 5 запитів знайде по 10 фрагментів
+    llm=ChatOpenAI(temperature=0, model_name=LLM_MODEL_MULTI_QUERY),
+    prompt=QUERY_PROMPT
+)
 
 # --- ПРОМПТ ДЛЯ ГЕНЕРАЦІЇ ВІДПОВІДІ (КРОК 2) ---
 main_prompt_template = """
@@ -106,9 +114,7 @@ app.add_middleware(
 )
 
 class QueryRequest(BaseModel):
-    question: str
-    user_name: str
-    language: str
+    question: str; user_name: str; language: str
 
 @app.post("/query")
 def process_query(request: QueryRequest):
@@ -118,7 +124,6 @@ def process_query(request: QueryRequest):
         classification = classification_result['text'].strip().lower()
 
         if "irrelevant" in classification:
-            # Якщо питання нерелевантne, повертаємо HTML-відповідь з кнопками
             off_topic_response = """
             На жаль, це питання не стосується безпекових угод України. Можливо, вас зацікавить:<br>
             <div class="suggestions-container">
@@ -129,9 +134,12 @@ def process_query(request: QueryRequest):
             """
             return {"answer": off_topic_response}
 
-        # --- КРОК 2: ЯКЩО РЕЛЕВАНТНЕ, ШУКАЄМО ІНФОРМАЦІЮ І ГЕНЕРУЄМО ВІДПОВІДЬ ---
-        relevant_docs = retriever.invoke(request.question)
-        
+        # --- КРОК 2: ЯКЩО РЕЛЕВАНТНЕ, ВИКОРИСТОВУЄМО MultiQueryRetriever для пошуку документів ---
+        print(f"Отримано релевантне питання: {request.question}")
+        relevant_docs = multi_query_retriever.invoke(request.question)
+        print(f"Знайдено {len(relevant_docs)} релевантних фрагментів через MultiQueryRetriever.")
+
+        # --- КРОК 3: ФОРМУЄМО КОНТЕКСТ І ГЕНЕРУЄМО ВІДПОВІДЬ ---
         context_with_metadata = ""
         unique_sources_for_links = {}
 
@@ -140,10 +148,10 @@ def process_query(request: QueryRequest):
             doc_title = DOCUMENT_TITLES.get(source_filename, source_filename)
             page_num = doc.metadata.get("page", 0) + 1
             
-            # Створюємо URL-дружню частину ("слаг") для посилання
             slug = os.path.splitext(source_filename)[0].lower().replace(' ', '-').replace('+', '-')
             url = f"https://agreementmindbot.win/agreements/{slug}/"
-            unique_sources_for_links[doc_title] = url
+            if doc_title: # Додаємо тільки якщо назва відома
+                unique_sources_for_links[doc_title] = url
             
             context_with_metadata += f"--- Фрагмент з документу ---\n"
             context_with_metadata += f"Назва документу: {doc_title}\n"
@@ -157,16 +165,6 @@ def process_query(request: QueryRequest):
         
         answer_text = main_result['text']
         
-        # Додаємо блок з посиланнями, ЯКЩО є хоча б одне джерело
-        if unique_sources_for_links:
-            answer_text += "\n\n---\n**Пов'язані документи:**\n"
-            # Створюємо список лише з тих джерел, які ШІ згадав у відповіді
-            used_titles = [title for title in unique_sources_for_links if title in answer_text]
-            for title in set(used_titles): # Використовуємо set для унікальності
-                url = unique_sources_for_links[title]
-                answer_text += f"* {title}\n" # Спочатку додаємо текст
-        
-        # Перетворюємо назви на клікабельні посилання
         final_answer = answer_text
         for title, url in unique_sources_for_links.items():
             if title in final_answer:

@@ -148,7 +148,7 @@ def process_query(request: QueryRequest):
 
         # --- КРОК 2: ЯКЩО РЕЛЕВАНТНЕ, ВИКОРИСТОВУЄМО MultiQueryRetriever для пошуку документів ---
         print(f"Отримано релевантне питання: {request.question}")
-        relevant_docs = multi_query_retriever.invoke(request.question)
+        relevant_docs = retriever_from_llm.invoke(request.question)
         print(f"Знайдено {len(relevant_docs)} релевантних фрагментів через MultiQueryRetriever.")
 
         # --- КРОК 3: ФОРМУЄМО КОНТЕКСТ І ГЕНЕРУЄМО ВІДПОВІДЬ ---

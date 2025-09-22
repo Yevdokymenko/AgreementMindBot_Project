@@ -125,33 +125,40 @@ class QueryRequest(BaseModel):
 @app.post("/query")
 def process_query(request: QueryRequest):
     try:
-        # retriever.invoke тепер повертає об'єкти Document з метаданими
         relevant_docs = retriever.invoke(request.question)
         
         context_with_metadata = ""
+        # Створимо унікальний список використаних джерел для посилань
+        unique_sources = {} 
+
         for doc in relevant_docs:
-            # Витягуємо назву файлу з метаданих
             source_filename = os.path.basename(doc.metadata.get("source", "Невідоме джерело"))
-            # Беремо красиву назву зі словника, або назву файлу, якщо не знайшли
             doc_title = DOCUMENT_TITLES.get(source_filename, source_filename)
-            # Витягуємо номер сторінки (для PDF), якщо він є
-            page_num = doc.metadata.get("page", "N/A")
-            if page_num != "N/A":
-                page_num += 1 # Номерація сторінок починається з 0, робимо її звичною для людей
+            page_num = doc.metadata.get("page", 0) + 1
             
-            # Формуємо красивий контекст для передачі в ШІ
+            # Створюємо URL-дружню назву файлу
+            slug = os.path.splitext(source_filename)[0].lower().replace(' ', '-').replace('+', '-')
+            unique_sources[doc_title] = f"https://agreementmindbot.win/agreements/{slug}/"
+
             context_with_metadata += f"--- Фрагмент з документу ---\n"
             context_with_metadata += f"Назва документу: {doc_title}\n"
             context_with_metadata += f"Сторінка: {page_num}\n"
             context_with_metadata += f"Зміст: {doc.page_content}\n\n"
 
-        # Викликаємо ланцюг з новим, збагаченим контекстом
         result = chain.invoke({
             "context": context_with_metadata,
             "question": request.question
         })
         
-        return {"answer": result['text']}
+        answer_text = result['text']
+        
+        # Додаємо блок з посиланнями в кінець відповіді
+        if unique_sources:
+            answer_text += "\n\n---\n**Пов'язані документи:**\n"
+            for title, url in unique_sources.items():
+                answer_text += f"* <a href='{url}' target='_blank'>{title}</a>\n"
+        
+        return {"answer": answer_text}
     except Exception as e:
         print("!!! ВИНИКЛА ПОМИЛКА ПІД ЧАС ОБРОБКИ ЗАПИТУ !!!")
         print(f"Тип помилки: {type(e).__name__}")

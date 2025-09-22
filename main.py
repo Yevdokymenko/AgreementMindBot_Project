@@ -118,7 +118,7 @@ def process_query(request: QueryRequest):
         classification = classification_result['text'].strip().lower()
 
         if "irrelevant" in classification:
-            # Якщо питання нерелевантне, повертаємо стандартну відповідь з кнопками
+            # Якщо питання нерелевантne, повертаємо HTML-відповідь з кнопками
             off_topic_response = """
             На жаль, це питання не стосується безпекових угод України. Можливо, вас зацікавить:<br>
             <div class="suggestions-container">
@@ -140,6 +140,7 @@ def process_query(request: QueryRequest):
             doc_title = DOCUMENT_TITLES.get(source_filename, source_filename)
             page_num = doc.metadata.get("page", 0) + 1
             
+            # Створюємо URL-дружню частину ("слаг") для посилання
             slug = os.path.splitext(source_filename)[0].lower().replace(' ', '-').replace('+', '-')
             url = f"https://agreementmindbot.win/agreements/{slug}/"
             unique_sources_for_links[doc_title] = url
@@ -155,12 +156,21 @@ def process_query(request: QueryRequest):
         })
         
         answer_text = main_result['text']
-
-        # Додаємо клікабельні посилання
+        
+        # Додаємо блок з посиланнями, ЯКЩО є хоча б одне джерело
+        if unique_sources_for_links:
+            answer_text += "\n\n---\n**Пов'язані документи:**\n"
+            # Створюємо список лише з тих джерел, які ШІ згадав у відповіді
+            used_titles = [title for title in unique_sources_for_links if title in answer_text]
+            for title in set(used_titles): # Використовуємо set для унікальності
+                url = unique_sources_for_links[title]
+                answer_text += f"* {title}\n" # Спочатку додаємо текст
+        
+        # Перетворюємо назви на клікабельні посилання
         final_answer = answer_text
         for title, url in unique_sources_for_links.items():
             if title in final_answer:
-                final_answer = final_answer.replace(title, f"<a href='{url}' target='_blank'>{title}</a>")
+                final_answer = final_answer.replace(title, f"<a href='{url}' target='_blank' rel='noopener noreferrer'>{title}</a>")
 
         return {"answer": final_answer}
 

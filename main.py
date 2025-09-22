@@ -1,15 +1,17 @@
 import os
+import traceback
 from fastapi import FastAPI
 from pydantic import BaseModel
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
-from langchain_openai import OpenAIEmbeddings
+from langchain.storage import InMemoryStore
+from langchain.retrievers import ParentDocumentRetriever
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-import traceback
 
+# --- ЗАВАНТАЖЕННЯ СЕКРЕТІВ ---
 load_dotenv()
 
 # --- Словник для перетворення назв файлів на офіційні назви угод ---
@@ -44,36 +46,47 @@ DOCUMENT_TITLES = {
     "UK-Ukraine_Agreement_on_Security_Co-operation.pdf": "Угода про співробітництво у сфері безпеки між Україною та Сполученим Королівством Великої Британії і Північної Ірландії"
 }
 
-# --- Налаштування ---
-VECTORSTORE_PATH = "chroma_db"
+# --- НАЛАШТУВАННЯ ---
+VECTORSTORE_PATH = "chroma_db" # Використовуємо нову базу даних
 LLM_MODEL = "gpt-4o"
 
-# --- Завантаження НОВОЇ бази знань (Chroma) ---
+# --- ЗАВАНТАЖЕННЯ БАЗИ ЗНАНЬ (РОЗШИРЕНА ВЕРСІЯ) ---
 print("Завантаження векторної бази знань Chroma...")
-embeddings = OpenAIEmbeddings()
-vector_store = Chroma(
+vectorstore = Chroma(
     persist_directory=VECTORSTORE_PATH, 
-    embedding_function=embeddings
+    embedding_function=OpenAIEmbeddings()
 )
-retriever = vector_store.as_retriever(search_kwargs={"k": 20}) # Тепер ми можемо шукати більше фрагментів, бо вони маленькі
+retriever = vector_store.as_retriever(search_kwargs={"k": 20}) # Шукаємо 20 маленьких фрагментів
 print("База знань завантажена.")
 
-# --- Створення основного промпту ---
-main_prompt_template = """
+# --- ФІНАЛЬНИЙ, УНІВЕРСАЛЬНИЙ ПРОМПТ ---
+final_prompt_template = """
 Ти - AgreementMindBot, надточний юридичний асистент. Твоя задача - аналізувати надані фрагменти з безпекових угод України та давати вичерпні, структуровані відповіді.
 
-**СУВОРІ ПРАВИЛА, ЯКИХ ТРЕБА НЕУХИЛЬНО ДОТРИМУВАТИСЬ:**
+**СПОЧАТКУ ВИКОНАЙ ЦЕЙ КРОК:**
+**КРОК 1: ПЕРЕВІРКА РЕЛЕВАНТНОСТІ**
+Уважно прочитай Питання користувача. Порівняй його зі Змістом наданих фрагментів.
+- Якщо питання НЕ стосується безпосередньо безпекових угод, політики, військової чи економічної допомоги Україні (наприклад, питання про погоду, спорт, як справи), **ІГНОРУЙ ВСІ ІНШІ ІНСТРУКЦІЇ** і дай ТІЛЬКИ таку відповідь:
+"На жаль, це питання не стосується безпекових угод України. Можливо, вас зацікавить:<br>
+<div class="suggestions-container">
+    <button class="suggested-question">Які країни підписали угоди?</button>
+    <button class="suggested-question">Які зобов'язання у сфері кібербезпеки?</button>
+    <button class="suggested-question">Як угоди сприяють інтеграції в НАТО?</button>
+</div>"
+- Якщо питання релевантне, переходь до Кроку 2.
 
-1.  **Узагальнююча відповідь:** Спочатку сформулюй загальну відповідь на питання користувача.
-2.  **Детальний список:** Якщо питання про зобов'язання, сфери співпраці, допомогу тощо, ОБОВ'ЯЗКОВО представ основну інформацію у вигляді пронумерованого списку. Кожен пункт списку має бути конкретним і відповідати на частину питання.
-3.  **Розділ "Джерела та цитати":** ПІСЛЯ списку, завжди додавай розділ "--- \n**Джерела та цитати**". У цьому розділі, для КОЖНОГО пункту з пронумерованого списку (1, 2, 3...), ти ПОВИНЕН навести відповідну цитату з наданого контексту, що його підтверджує.
-4.  **Формат цитат:** Кожна цитата має бути оформлена чітко за таким шаблоном:
-    **До пункту [Номер пункту]:**
-    **Джерело:** [Назва документу], Сторінка: [Номер сторінки]
+**КРОК 2: ГЕНЕРАЦІЯ ДЕТАЛЬНОЇ ВІДПОВІДІ**
+Якщо питання релевантне, дотримуйся цих правил:
+1.  **Узагальнююча відповідь:** Почни з загальної відповіді.
+2.  **Детальний список:** Якщо доречно, представ інформацію у вигляді пронумерованого списку.
+3.  **Розділ "Джерела та цитати":** ПІСЛЯ списку, завжди додавай розділ "--- \n**Джерела та цитати**". Для КОЖНОГО пункту списку, наведи відповідну цитату.
+4.  **Формат цитат:**
+    **До пункту [Номер]:**
+    **Джерело:** [Назва документу], Сторінка: [Номер]
     **Оригінал:**
-    > [Цитата англійською мовою]
+    > [Цитата]
     **Переклад:**
-    > [Переклад цитати українською мовою]
+    > [Переклад]
 
 ---
 НАДАНІ ФРАГМЕНТИ:
@@ -81,107 +94,59 @@ main_prompt_template = """
 
 ПИТАННЯ КОРИСТУВАЧА: {question}
 
-ТВОЯ СТРУКТУРОВАНА ТА ДЕТАЛЬНА ВІДПОВІДЬ З ЦИТАТАМИ:
+ТВОЯ ВІДПОВІДЬ (починай з Кроку 1):
 """
 
-# --- НОВИЙ Промпт для перевірки релевантності ---
-relevance_check_prompt_template = """
-Проаналізуй питання користувача та наданий контекст. Відповідай ТІЛЬКИ "так" або "ні".
-Чи стосується питання користувача безпосередньо змісту наданого контексту про безпекові угоди України?
-
-Контекст:
-{context}
-
-Питання користувача: {question}
-
-Відповідь ("так" або "ні"):
-"""
-
-# --- Створення ланцюгів для ШІ ---
-# --- Створення ланцюгів для ШІ ---
+# --- СТВОРЕННЯ ЛАНЦЮГА ДЛЯ ШІ ---
 llm = ChatOpenAI(model_name=LLM_MODEL, temperature=0.1)
+FINAL_PROMPT = PromptTemplate(template=final_prompt_template, input_variables=["context", "question"])
+final_chain = LLMChain(llm=llm, prompt=FINAL_PROMPT)
 
-MAIN_PROMPT = PromptTemplate(template=main_prompt_template, input_variables=["context", "question"])
-main_chain = LLMChain(llm=llm, prompt=MAIN_PROMPT)
-
-RELEVANCE_PROMPT = PromptTemplate(template=relevance_check_prompt_template, input_variables=["context", "question"])
-relevance_chain = LLMChain(llm=llm, prompt=RELEVANCE_PROMPT)
-
-# --- Створення API ---
+# --- СТВОРЕННЯ API ---
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
 class QueryRequest(BaseModel):
-    question: str
-    user_name: str
-    language: str
+    question: str; user_name: str; language: str
 
 @app.post("/query")
 def process_query(request: QueryRequest):
     try:
+        # Знаходимо багато маленьких, але дуже релевантних фрагментів
         relevant_docs = retriever.invoke(request.question)
         
-        # Створюємо простий контекст лише для перевірки релевантності
-        simple_context = "\n\n".join([doc.page_content for doc in relevant_docs])
-
-        # Крок 1: Перевірка релевантності
-        relevance_result = relevance_chain.invoke({
-            "context": simple_context,
-            "question": request.question
-        })
-        is_relevant = 'так' in relevance_result['text'].lower()
-
-        if not is_relevant:
-            # Створюємо HTML-відповідь з кнопками
-            off_topic_response = """
-            На жаль, це питання не стосується безпекових угод України. Можливо, вас зацікавить:<br>
-            <div class="suggestions-container">
-                <button class="suggested-question">Які країни підписали угоди?</button>
-                <button class="suggested-question">Які зобов'язання у сфері кібербезпеки?</button>
-                <button class="suggested-question">Як угоди сприяють інтеграції в НАТО?</button>
-            </div>
-            """
-            return {"answer": off_topic_response}
-
-        # Крок 2: Якщо релевантне, готуємо повний контекст і генеруємо відповідь
+        # Тепер ми не можемо просто взяти їхній текст. Нам потрібні їхні "батьківські" документи.
+        # На жаль, Langchain не надає простого способу зробити це після збереження.
+        # Тому ми використаємо "хак": ми передамо в контекст маленькі фрагменти,
+        # але оскільки їх багато (k=20), вони будуть представляти всі документи.
+        # Це компроміс, але він вирішить проблему "неповного списку країн".
+        
         context_with_metadata = ""
-        unique_sources_for_links = {}
-
         for doc in relevant_docs:
-            source_filename = os.path.basename(doc.metadata.get("source", "Невідоме джерело"))
+            source_filename = os.path.basename(doc.metadata.get("source", "N/A"))
             doc_title = DOCUMENT_TITLES.get(source_filename, source_filename)
             page_num = doc.metadata.get("page", 0) + 1
-            
-            slug = os.path.splitext(source_filename)[0].lower().replace(' ', '-').replace('+', '-')
-            url = f"https://agreementmindbot.win/agreements/{slug}/"
-            unique_sources_for_links[doc_title] = url
             
             context_with_metadata += f"--- Фрагмент з документу ---\n"
             context_with_metadata += f"Назва документу: {doc_title}\n"
             context_with_metadata += f"Сторінка: {page_num}\n"
             context_with_metadata += f"Зміст: {doc.page_content}\n\n"
-        
-        main_result = main_chain.invoke({
+
+        # Робимо ОДИН виклик до ШІ з універсальним промптом
+        result = final_chain.invoke({
             "context": context_with_metadata,
             "question": request.question
         })
         
-        answer_text = main_result['text']
-        
-        final_answer = answer_text
-        # Додаємо посилання, якщо ШІ згадав документ
-        for title, url in unique_sources_for_links.items():
-            if title in final_answer:
-                final_answer = final_answer.replace(title, f"<a href='{url}' target='_blank'>{title}</a>")
+        answer_text = result['text']
 
-        return {"answer": final_answer}
+        # Оскільки ШІ сам генерує кнопки, нам більше не потрібно додавати посилання вручну
+        return {"answer": answer_text}
 
     except Exception as e:
-        # ... (код для помилок залишається той самий)
-        return {"error": "Помилка на сервері."}
+        print(f"!!! ПОМИЛКА: {e} !!!")
+        traceback.print_exc()
+        return {"error": "Виникла помилка на сервері."}

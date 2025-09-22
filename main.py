@@ -6,8 +6,11 @@ from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
-from fastapi.middleware.cors import CORSMiddleware # Додано для WordPress
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+import traceback
+
+# Завантажуємо змінні середовища з файлу .env
 load_dotenv()
 
 # --- Словник для перетворення назв файлів на офіційні назви угод ---
@@ -44,72 +47,45 @@ DOCUMENT_TITLES = {
 
 # --- Налаштування ---
 INDEX_PATH = "faiss_index"
-LLM_MODEL = "gpt-3.5-turbo"
+LLM_MODEL = "gpt-4o" # Використовуємо новішу і розумнішу модель
 
 # --- Завантаження бази знань ---
 embeddings = OpenAIEmbeddings()
-vector_store = FAISS.load_local(INDEX_PATH, embeddings, allow_dangerous_deserialization=True) # Додано прапорець
-retriever = vector_store.as_retriever(search_kwargs={"k": 10}) # Будемо шукати 3 найбільш релевантні шматки
+vector_store = FAISS.load_local(INDEX_PATH, embeddings, allow_dangerous_deserialization=True)
+retriever = vector_store.as_retriever(search_kwargs={"k": 10}) # Збільшили до 10
 
-# --- Створення промпту (інструкції для ШІ) ---
-prompt_template = """
-Ти - AgreementMindBot, надточний юридичний асистент. Твоя задача - аналізувати надані фрагменти з безпекових угод України та давати вичерпні, структуровані відповіді.
-
-**СУВОРІ ПРАВИЛА, ЯКИХ ТРЕБА НЕУХИЛЬНО ДОТРИМУВАТИСЬ:**
-
-1.  **Узагальнююча відповідь:** Спочатку сформулюй загальну відповідь на питання користувача.
-2.  **Детальний список:** Якщо питання про зобов'язання, сфери співпраці, допомогу тощо, ОБОВ'ЯЗКОВО представ основну інформацію у вигляді пронумерованого списку. Кожен пункт списку має бути конкретним і відповідати на частину питання.
-3.  **Розділ "Джерела та цитати":** ПІСЛЯ списку, завжди додавай розділ "--- \n**Джерела та цитати**". У цьому розділі, для КОЖНОГО пункту з пронумерованого списку (1, 2, 3...), ти ПОВИНЕН навести відповідну цитату з наданого контексту, що його підтверджує.
-4.  **Формат цитат:** Кожна цитата має бути оформлена чітко за таким шаблоном:
-    **До пункту [Номер пункту]:**
-    **Джерело:** [Назва документу], Сторінка: [Номер сторінки]
-    **Оригінал:**
-    > [Цитата англійською мовою]
-    **Переклад:**
-    > [Переклад цитати українською мовою]
-
-**ПРИКЛАД ВІДПОВІДІ:**
-
-Норвегія зобов'язалася надати Україні комплексну довгострокову підтримку, яка охоплює військову, цивільну та гуманітарну сфери.
-
-Основні зобов'язання включають:
-1.  Надання військової допомоги з акцентом на морську безпеку, ППО та бойову авіацію.
-2.  Фінансування через програму Нансена, що передбачає виділення значних коштів на період 2023-2027 років.
-3.  Сприяння розвитку оборонної промисловості України та її інтеграції в структури НАТО.
-4.  Підтримка реформ, необхідних для майбутнього членства України в ЄС та НАТО.
-
----
-**Джерела та цитати**
-
-**До пункту 1:**
-**Джерело:** Угода про співробітництво... між Королівством Норвегія та Україною, Сторінка: 3
-**Оригінал:**
-> Norway's military assistance to Ukraine is focused on maritime security, integrated air and missile defence, and combat aircraft.
-**Переклад:**
-> Військова допомога Норвегії Україні зосереджена на морській безпеці, інтегрованій протиповітряній та протиракетній обороні, а також бойовій авіації.
-
-**(і так далі для кожного пункту)**
-
----
-НАДАНІ ФРАГМЕНТИ:
-{context}
-
-ПИТАННЯ КОРИСТУВАЧА: {question}
-
-ТВОЯ СТРУКТУРОВАНА ТА ДЕТАЛЬНА ВІДПОВІДЬ З ЦИТАТАМИ:
+# --- Створення основного промпту ---
+main_prompt_template = """
+Ти - AgreementMindBot... (вставте сюди останню версію вашого детального промпту з попередньої відповіді)
 """
 
-PROMPT = PromptTemplate(template=prompt_template, input_variables=["context", "user_name", "language", "question"])
+# --- НОВИЙ Промпт для перевірки релевантності ---
+relevance_check_prompt_template = """
+Проаналізуй питання користувача та наданий контекст. Відповідай ТІЛЬКИ "так" або "ні".
+Чи стосується питання користувача безпосередньо змісту наданого контексту про безпекові угоди України?
+
+Контекст:
+{context}
+
+Питання користувача: {question}
+
+Відповідь ("так" або "ні"):
+"""
+
+# --- Створення ланцюгів для ШІ ---
 llm = ChatOpenAI(model_name=LLM_MODEL, temperature=0)
-chain = LLMChain(llm=llm, prompt=PROMPT)
+
+MAIN_PROMPT = PromptTemplate(template=main_prompt_template, input_variables=["context", "question"])
+main_chain = LLMChain(llm=llm, prompt=MAIN_PROMPT)
+
+RELEVANCE_PROMPT = PromptTemplate(template=relevance_check_prompt_template, input_variables=["context", "question"])
+relevance_chain = LLMChain(llm=llm, prompt=RELEVANCE_PROMPT)
 
 # --- Створення API ---
 app = FastAPI()
-
-# Додаємо CORS middleware для дозволу запитів з вашого сайту WordPress
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Для тестування можна "*", для продакшену вкажіть "https://agreementmindbot.win"
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -125,6 +101,21 @@ def process_query(request: QueryRequest):
     try:
         relevant_docs = retriever.invoke(request.question)
         
+        # Створюємо простий контекст лише для перевірки релевантності
+        simple_context = "\n\n".join([doc.page_content for doc in relevant_docs])
+
+        # Крок 1: Перевірка релевантності
+        relevance_result = relevance_chain.invoke({
+            "context": simple_context,
+            "question": request.question
+        })
+        is_relevant = 'так' in relevance_result['text'].lower()
+
+        if not is_relevant:
+            # Якщо питання нерелевантне, повертаємо стандартну відповідь
+            return {"answer": "На жаль, це питання не стосується безпекових угод України. Можливо, вас зацікавить:\n1. Які країни підписали угоди?\n2. Які зобов'язання у сфері кібербезпеки?\n3. Як угоди сприяють інтеграції в НАТО?"}
+
+        # Крок 2: Якщо релевантне, готуємо повний контекст і генеруємо відповідь
         context_with_metadata = ""
         unique_sources_for_links = {}
 
@@ -142,31 +133,21 @@ def process_query(request: QueryRequest):
             context_with_metadata += f"Сторінка: {page_num}\n"
             context_with_metadata += f"Зміст: {doc.page_content}\n\n"
         
-        # ВАЖЛИВО: Виклик ШІ залишається тим самим
-        result = chain.invoke({
+        main_result = main_chain.invoke({
             "context": context_with_metadata,
             "question": request.question
         })
         
-        answer_text = result['text']
-        
-        # Тепер ШІ сам має створити список джерел. Ми лише перетворимо їх на клікабельні посилання.
-        # Наприклад, якщо ШІ створив рядок "* Угода про співробітництво... між Королівством Норвегія та Україною"
-        # Ми знайдемо його і додамо посилання.
+        answer_text = main_result['text']
         
         final_answer = answer_text
+        # Додаємо посилання, якщо ШІ згадав документ
         for title, url in unique_sources_for_links.items():
-            if title in final_answer: # Перевіряємо, чи згадав ШІ цей документ у відповіді
+            if title in final_answer:
                 final_answer = final_answer.replace(title, f"<a href='{url}' target='_blank'>{title}</a>")
 
-        return {"answer": final_answer} # Повертаємо текст, де назви документів вже є посиланнями
+        return {"answer": final_answer}
 
     except Exception as e:
-        print("!!! ВИНИКЛА ПОМИЛКА ПІД ЧАС ОБРОБКИ ЗАПИТУ !!!")
-        print(f"Тип помилки: {type(e).__name__}")
-        print(f"Повідомлення: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"error": "Помилка на сервері. Деталі див. у консолі сервера."}
-
-# Команда для запуску: uvicorn main:app --reload
+        # ... (код для помилок залишається той самий)
+        return {"error": "Помилка на сервері."}

@@ -78,6 +78,18 @@ retriever_from_llm = MultiQueryRetriever.from_llm(
     prompt=QUERY_PROMPT
 )
 
+# --- ПРОМПТ ДЛЯ КЛАСИФІКАЦІЇ ПИТАНЬ (для відсіювання "яка погода?") ---
+classifier_prompt_template = """
+Проаналізуй питання користувача. Твоя задача - класифікувати його.
+Якщо питання стосується безпекових угод, політики, військової допомоги, міжнародних відносин України, відповідай ТІЛЬКИ одним словом: 'relevant'.
+Якщо питання є загальним, побутовим, не пов'язаним з темою (наприклад, "як справи?", "яка погода?"), відповідай ТІЛЬКИ одним словом: 'irrelevant'.
+Питання користувача: "{question}"
+Твоя відповідь (тільки 'relevant' або 'irrelevant'):
+"""
+CLASSIFIER_PROMPT = PromptTemplate.from_template(classifier_prompt_template)
+classifier_llm = ChatOpenAI(model_name=LLM_MODEL_CLASSIFY_AND_QUERY, temperature=0)
+classifier_chain = LLMChain(llm=classifier_llm, prompt=CLASSIFIER_PROMPT)
+
 # --- ПРОМПТ ДЛЯ ГЕНЕРАЦІЇ ВІДПОВІДІ (КРОК 2) ---
 main_prompt_template = """
 Ти - AgreementMindBot, надточний юридичний асистент. Твоя задача - аналізувати надані фрагменти з безпекових угод України та давати вичерпні, структуровані відповіді.

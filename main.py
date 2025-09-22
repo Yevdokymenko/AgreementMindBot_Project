@@ -112,8 +112,16 @@ def process_query(request: QueryRequest):
         is_relevant = 'так' in relevance_result['text'].lower()
 
         if not is_relevant:
-            # Якщо питання нерелевантне, повертаємо стандартну відповідь
-            return {"answer": "На жаль, це питання не стосується безпекових угод України. Можливо, вас зацікавить:\n1. Які країни підписали угоди?\n2. Які зобов'язання у сфері кібербезпеки?\n3. Як угоди сприяють інтеграції в НАТО?"}
+            # Створюємо HTML-відповідь з кнопками
+            off_topic_response = """
+            На жаль, це питання не стосується безпекових угод України. Можливо, вас зацікавить:<br>
+            <div class="suggestions-container">
+                <button class="suggested-question">Які країни підписали угоди?</button>
+                <button class="suggested-question">Які зобов'язання у сфері кібербезпеки?</button>
+                <button class="suggested-question">Як угоди сприяють інтеграції в НАТО?</button>
+            </div>
+            """
+            return {"answer": off_topic_response}
 
         # Крок 2: Якщо релевантне, готуємо повний контекст і генеруємо відповідь
         context_with_metadata = ""

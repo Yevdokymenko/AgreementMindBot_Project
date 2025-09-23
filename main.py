@@ -47,7 +47,13 @@ DOCUMENT_TITLES = {
 REFERENCE_FILE_NAME = "Dovidka_09_2025.docx"
 
 # --- НАЛАШТУВАННЯ ---
-VECTORSTORE_PATH = "chroma_db"
+# Абсолютний шлях до папки, де лежить цей скрипт
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Будуємо правильні шляхи до наших папок
+VECTORSTORE_PATH = os.path.join(BASE_DIR, "chroma_db")
+DOCUMENTS_DIR = os.path.join(BASE_DIR, "documents")
+
 LLM_MODEL_MAIN = "gpt-4o"
 LLM_MODEL_CLASSIFY = "gpt-4o-mini"
 

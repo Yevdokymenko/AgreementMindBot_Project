@@ -8,6 +8,7 @@ from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from langchain_community.document_loaders import Docx2txtLoader
 
 load_dotenv()
 
@@ -43,19 +44,25 @@ DOCUMENT_TITLES = {
     "Joint Security Commitments between Ukraine and the European Union.docx": "Спільні безпекові зобов'язання між Україною та Європейським Союзом",
     "UK-Ukraine_Agreement_on_Security_Co-operation.pdf": "Угода про співробітництво у сфері безпеки між Україною та Сполученим Королівством Великої Британії і Північної Ірландії"
 }
+REFERENCE_FILE_NAME = "Dovidka_09_2025.docx"
 
 # --- НАЛАШТУВАННЯ ---
 VECTORSTORE_PATH = "chroma_db"
 LLM_MODEL_MAIN = "gpt-4o"
 LLM_MODEL_CLASSIFY = "gpt-4o-mini"
 
-# --- ЗАВАНТАЖЕННЯ БАЗИ ЗНАНЬ ---
-print("Завантаження векторної бази знань Chroma...")
+# --- ЗАВАНТАЖЕННЯ БАЗИ ЗНАНЬ З УГОДАМИ (КРОК 1) ---
+print("Завантаження векторної бази знань Chroma (для угод)...")
 embeddings = OpenAIEmbeddings()
 vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
-# ВИКОРИСТОВУЄМО ПРОСТИЙ РЕТРИВЕР, АЛЕ З ВЕЛИКИМ КОНТЕКСТОМ
-retriever = vectorstore.as_retriever(search_kwargs={"k": 100}) 
-print("База знань завантажена.")
+retriever = vectorstore.as_retriever(search_kwargs={"k": 50}) 
+print("База знань з угодами завантажена.")
+
+# --- ЗАВАНТАЖЕННЯ ФАЙЛУ-ДОВІДКИ В ПАМ'ЯТЬ (КРОК 2) ---
+print("Завантаження файлу-довідки...")
+reference_loader = Docx2txtLoader(os.path.join("documents", REFERENCE_FILE_NAME))
+reference_text = reference_loader.load()[0].page_content
+print("Файл-довідка завантажено.")
 
 # --- ЛАНЦЮГИ ШІ ---
 classifier_prompt_template = """Проаналізуй питання користувача. Класифікуй його на один з трьох типів:
@@ -109,9 +116,11 @@ class QueryRequest(BaseModel):
 @app.post("/query")
 def process_query(request: QueryRequest):
     try:
+        # --- КРОК 1: КЛАСИФІКАЦІЯ ПИТАННЯ ---
         classification_result = classifier_chain.invoke({"question": request.question})
         classification = classification_result['text'].strip().lower()
 
+        # Якщо питання нерелевантне, одразу повертаємо відповідь з кнопками
         if "irrelevant" in classification:
             off_topic_response = """
             На жаль, це питання не стосується безпекових угод України. Можливо, вас зацікавить:<br>
@@ -123,12 +132,21 @@ def process_query(request: QueryRequest):
             """
             return {"answer": off_topic_response}
 
-        context_with_metadata = ""
-        relevant_docs = retriever.invoke(request.question)
-        
+        # --- КРОК 2: ВИБІР СТРАТЕГІЇ ТА ФОРМУВАННЯ КОНТЕКСТУ ---
         context_with_metadata = ""
         unique_sources_for_links = {}
+        
+        if "general_listing" in classification:
+            print("Стратегія: Загальний перелік. Використовую довідку + пошук.")
+            # Спочатку додаємо в контекст ВЕСЬ текст довідки
+            context_with_metadata = f"--- Фрагмент ---\nНазва: Зведена довідка по безпекових угодах\nЗміст: {reference_text}\n\n"
+            # Потім додаємо результати звичайного пошуку, щоб знайти додаткові деталі та цитати
+            relevant_docs = retriever.invoke(request.question)
+        else: # 'specific_question'
+            print(f"Стратегія: Конкретне питання. Використовую векторний пошук.")
+            relevant_docs = retriever.invoke(request.question)
 
+        # Обробляємо знайдені документи (або для збагачення довідки, або як основне джерело)
         for doc in relevant_docs:
             source_filename = os.path.basename(doc.metadata.get("source", "N/A"))
             doc_title = DOCUMENT_TITLES.get(source_filename, "Невідомий документ")
@@ -141,9 +159,14 @@ def process_query(request: QueryRequest):
             
             context_with_metadata += f"--- Фрагмент ---\nНазва: {doc_title}\nЗміст: {doc.page_content}\n\n"
         
-        main_result = main_chain.invoke({"context": context_with_metadata, "question": request.question})
+        # --- КРОК 3: ГЕНЕРАЦІЯ ВІДПОВІДІ ---
+        main_result = main_chain.invoke({
+            "context": context_with_metadata,
+            "question": request.question
+        })
         answer_text = main_result['text']
         
+        # --- КРОК 4: ДОДАВАННЯ ПОСИЛАНЬ ---
         final_answer = answer_text
         used_titles = {title for title, url in unique_sources_for_links.items() if title in answer_text}
         

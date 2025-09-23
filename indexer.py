@@ -8,8 +8,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Будуємо абсолютний шлях до папки, де лежить цей скрипт
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Шлях до поточної папки (напр., /opt/render/project/src/)
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+# "Виходимо" з неї на один рівень вище (до /opt/render/project/)
+PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+# Тепер шукаємо папку 'documents' там
+DOCUMENTS_DIR = os.path.join(PROJECT_ROOT, "documents")
 # Папка 'documents' знаходиться в тій же директорії
 DOCUMENTS_PATH = os.path.join(BASE_DIR, "documents")
 VECTORSTORE_PATH = os.path.join(BASE_DIR, "chroma_db")

@@ -61,8 +61,12 @@ print("База знань з угодами завантажена.")
 # --- ЗАВАНТАЖЕННЯ ФАЙЛУ-ДОВІДКИ В ПАМ'ЯТЬ (КРОК 2) ---
 print("Завантаження файлу-довідки...")
 # Будуємо абсолютний шлях до папки 'documents' відносно поточного файлу
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DOCUMENTS_DIR = os.path.join(BASE_DIR, "documents")
+# Шлях до поточної папки (напр., /opt/render/project/src/)
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+# "Виходимо" з неї на один рівень вище (до /opt/render/project/)
+PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+# Тепер шукаємо папку 'documents' там
+DOCUMENTS_DIR = os.path.join(PROJECT_ROOT, "documents")
 
 reference_loader = Docx2txtLoader(os.path.join(DOCUMENTS_DIR, REFERENCE_FILE_NAME))
 

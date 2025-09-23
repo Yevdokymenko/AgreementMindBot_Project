@@ -10,8 +10,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Будуємо абсолютний шлях
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DOCUMENTS_PATH = os.path.join(BASE_DIR, "documents")
+# Шлях до поточної папки (напр., /opt/render/project/src/)
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+# "Виходимо" з неї на один рівень вище (до /opt/render/project/)
+PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+# Тепер шукаємо папку 'documents' там і присвоюємо її змінній DOCUMENTS_PATH
+DOCUMENTS_PATH = os.path.join(PROJECT_ROOT, "documents")
+
 VECTORSTORE_PATH = "chroma_db"
 
 def create_retriever():

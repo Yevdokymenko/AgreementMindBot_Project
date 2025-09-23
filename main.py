@@ -60,7 +60,12 @@ print("База знань з угодами завантажена.")
 
 # --- ЗАВАНТАЖЕННЯ ФАЙЛУ-ДОВІДКИ В ПАМ'ЯТЬ (КРОК 2) ---
 print("Завантаження файлу-довідки...")
-reference_loader = Docx2txtLoader(os.path.join("documents", REFERENCE_FILE_NAME))
+# Будуємо абсолютний шлях до папки 'documents' відносно поточного файлу
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DOCUMENTS_DIR = os.path.join(BASE_DIR, "documents")
+
+reference_loader = Docx2txtLoader(os.path.join(DOCUMENTS_DIR, REFERENCE_FILE_NAME))
+
 reference_text = reference_loader.load()[0].page_content
 print("Файл-довідка завантажено.")
 

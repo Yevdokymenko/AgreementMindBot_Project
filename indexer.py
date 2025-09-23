@@ -9,7 +9,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DOCUMENTS_PATH = "documents"
+# Будуємо абсолютний шлях
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DOCUMENTS_PATH = os.path.join(BASE_DIR, "documents")
 VECTORSTORE_PATH = "chroma_db"
 
 def create_retriever():

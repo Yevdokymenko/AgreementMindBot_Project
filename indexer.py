@@ -1,74 +1,35 @@
 import os
-from langchain.retrievers import ParentDocumentRetriever
-from langchain.storage import InMemoryStore
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
-from langchain_community.vectorstores import Chroma
-from langchain_openai import OpenAIEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from dotenv import load_dotenv
+import sys
 
-load_dotenv()
+print("="*50)
+print("=== ЗАПУСК ДІАГНОСТИЧНОГО СКРИПТА ===")
+print("="*50)
 
-# Будуємо абсолютний шлях
-# Шлях до поточної папки (напр., /opt/render/project/src/)
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-# "Виходимо" з неї на один рівень вище (до /opt/render/project/)
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-# Тепер шукаємо папку 'documents' там і присвоюємо її змінній DOCUMENTS_PATH
-DOCUMENTS_PATH = os.path.join(PROJECT_ROOT, "documents")
+try:
+    # Показуємо, звідки запускається скрипт
+    cwd = os.getcwd()
+    print(f"ПОТОЧНА РОБОЧА ДИРЕКТОРІЯ (os.getcwd()): {cwd}")
 
-VECTORSTORE_PATH = "chroma_db"
+    # Показуємо, де фізично лежить сам файл скрипта
+    script_path = os.path.abspath(__file__)
+    script_dir = os.path.dirname(script_path)
+    print(f"АБСОЛЮТНИЙ ШЛЯХ ДО СКРИПТА (__file__): {script_path}")
+    print(f"ПАПКА, В ЯКІЙ ЛЕЖИТЬ СКРИПТ (dirname): {script_dir}")
 
-def create_retriever():
-    print("Починаю обробку документів для створення просунутого ретривера...")
-    
-    # Завантажуємо всі документи
-    all_docs = []
-    for file in os.listdir(DOCUMENTS_PATH):
-        file_path = os.path.join(DOCUMENTS_PATH, file)
-        try:
-            if file.endswith(".pdf"):
-                loader = PyPDFLoader(file_path)
-            elif file.endswith(".docx"):
-                loader = Docx2txtLoader(file_path)
-            else:
-                continue # Пропускаємо файли інших типів
-            
-            print(f"Завантажую: {file}")
-            all_docs.extend(loader.load())
-        except Exception as e:
-            print(f"Помилка при обробці файлу {file}: {e}")
+    # Тепер ми дослідимо папки навколо нашого скрипта
+    # Це найважливіша частина. Вона покаже нам, де лежить папка 'documents'
+    print("\n" + "="*20 + " ВМІСТ БАТЬКІВСЬКОЇ ПАПКИ " + "="*20)
+    parent_of_script_dir = os.path.dirname(script_dir)
+    os.system(f"ls -laR {parent_of_script_dir}") # Рекурсивно показуємо вміст
 
-    if not all_docs:
-        print("Документи не знайдено. Перевірте папку 'documents'.")
-        return
+    print("\n" + "="*50)
+    print("=== ДІАГНОСТИКА ЗАВЕРШЕНА. ПРИМУСОВИЙ ВИХІД. ===")
+    print("="*50)
 
-    # "Батьківський" спліттер, який створює великі документи
-    parent_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
-    # "Дитячий" спліттер, який створює маленькі фрагменти для точного пошуку
-    child_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=100)
-    
-    # Створюємо векторне сховище (Chroma) та сховище для документів (InMemoryStore)
-    vectorstore = Chroma(
-        collection_name="full_documents",
-        embedding_function=OpenAIEmbeddings(),
-        persist_directory=VECTORSTORE_PATH # Вказуємо папку для збереження
-    )
-    store = InMemoryStore()
+    # Ми спеціально викликаємо помилку, щоб зупинити процес збірки
+    # і дати нам можливість спокійно подивитись логи.
+    sys.exit(1)
 
-    # Створюємо сам ParentDocumentRetriever
-    retriever = ParentDocumentRetriever(
-        vectorstore=vectorstore,
-        docstore=store,
-        child_splitter=child_splitter,
-        parent_splitter=parent_splitter,
-    )
-
-    print("Додаю документи до ретривера... Це може зайняти значний час.")
-    # Додаємо документи. Цей процес автоматично розіб'є їх на батьківські та дочірні частини.
-    retriever.add_documents(all_docs, ids=None)
-    
-    print(f"База знань успішно створена та збережена у папці: {VECTORSTORE_PATH}")
-
-if __name__ == "__main__":
-    create_retriever()
+except Exception as e:
+    print(f"!!! Помилка під час діагностики: {e} !!!")
+    sys.exit(1)

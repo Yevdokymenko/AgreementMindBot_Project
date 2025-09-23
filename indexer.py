@@ -1,60 +1,35 @@
 import os
-from langchain.storage import InMemoryStore
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
-from langchain_community.vectorstores import Chroma
-from langchain_openai import OpenAIEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from dotenv import load_dotenv
+import sys
 
-load_dotenv()
+print("="*50)
+print("=== ЗАПУСК ДІАГНОСТИЧНОГО СКРИПТА ===")
+print("="*50)
 
-# --- НАЛАШТУВАННЯ ШЛЯХІВ ---
-# Абсолютний шлях до папки, де лежить цей скрипт (напр., /opt/render/project/src)
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+try:
+    # Показуємо, звідки запускається скрипт
+    cwd = os.getcwd()
+    print(f"ПОТОЧНА РОБОЧА ДИРЕКТОРІЯ (os.getcwd()): {cwd}")
 
-# Будуємо правильні шляхи до наших папок
-DOCUMENTS_PATH = os.path.join(BASE_DIR, "documents")
-VECTORSTORE_PATH = os.path.join(BASE_DIR, "chroma_db")
+    # Показуємо, де фізично лежить сам файл скрипта
+    script_path = os.path.abspath(__file__)
+    script_dir = os.path.dirname(script_path)
+    print(f"АБСОЛЮТНИЙ ШЛЯХ ДО СКРИПТА (__file__): {script_path}")
+    print(f"ПАПКА, В ЯКІЙ ЛЕЖИТЬ СКРИПТ (dirname): {script_dir}")
 
-REFERENCE_FILE_NAME = "Dovidka_09_2025.docx"
+    # Тепер ми дослідимо папки навколо нашого скрипта
+    # Це найважливіша частина. Вона покаже нам, де лежить папка 'documents'
+    print("\n" + "="*20 + " ВМІСТ БАТЬКІВСЬКОЇ ПАПКИ " + "="*20)
+    parent_of_script_dir = os.path.dirname(script_dir)
+    os.system(f"ls -laR {parent_of_script_dir}") # Рекурсивно показуємо вміст
 
-def create_vector_store():
-    print("Починаю обробку угод...")
-    
-    agreement_docs = []
-    for file in os.listdir(DOCUMENTS_PATH):
-        if file == REFERENCE_FILE_NAME:
-            continue
-        file_path = os.path.join(DOCUMENTS_PATH, file)
-        try:
-            if file.endswith(".pdf"): loader = PyPDFLoader(file_path)
-            elif file.endswith(".docx"): loader = Docx2txtLoader(file_path)
-            else: continue
-            
-            print(f"Індексую угоду: {file}")
-            agreement_docs.extend(loader.load())
-        except Exception as e:
-            print(f"Помилка при обробці файлу {file}: {e}")
+    print("\n" + "="*50)
+    print("=== ДІАГНОСТИКА ЗАВЕРШЕНА. ПРИМУСОВИЙ ВИХІД. ===")
+    print("="*50)
 
-    if not agreement_docs:
-        print("Угоди не знайдено.")
-        return
+    # Ми спеціально викликаємо помилку, щоб зупинити процес збірки
+    # і дати нам можливість спокійно подивитись логи.
+    sys.exit(1)
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    split_texts = text_splitter.split_documents(agreement_docs)
-    
-    print("Створюю векторні представлення...")
-    vectorstore = Chroma.from_documents(
-        documents=split_texts, 
-        embedding=OpenAIEmbeddings(),
-        persist_directory=VECTORSTORE_PATH
-    )
-    
-    print(f"База знань для угод створена у папці: {VECTORSTORE_PATH}")
-
-if __name__ == "__main__":
-    if os.path.exists(VECTORSTORE_PATH):
-        import shutil
-        shutil.rmtree(VECTORSTORE_PATH)
-        print(f"Стару базу даних '{VECTORSTORE_PATH}' видалено.")
-    create_vector_store()
+except Exception as e:
+    print(f"!!! Помилка під час діагностики: {e} !!!")
+    sys.exit(1)

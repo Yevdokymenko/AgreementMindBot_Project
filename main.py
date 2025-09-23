@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 # --- НОВІ ІМПОРТИ ДЛЯ FUSION RETRIEVER ---
-from langchain.retrievers import BM25Retriever, EnsembleRetriever
+from langchain.retrievers import BM25Retriever, EnsembleRetriever, MultiQueryRetriever
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import logging
@@ -27,7 +27,7 @@ logging.getLogger("langchain.retrievers.multi_query").setLevel(logging.INFO)
 DOCUMENT_TITLES = {
     "2024-02-16-ukraine-sicherheitsvereinbarung-eng-data.pdf": "Угода про співробітництво у сфері безпеки та довгострокову підтримку між Україною та Федеративною Республікою Німеччина",
     "Accord on Support for Ukraine and Cooperation between Ukraine and the Government of Japan.pdf": "Угода про підтримку України та співробітництво між Урядом Японії та Україною",
-    "Accordo_Italia-Ucraina_20240224.pdf": "Угода про співробітництво у сфері безпеки між Італією та Україною",
+    "Accordo_Italia-Ucraina_20240224.docx": "Угода про співробітництво у сфері безпеки між Італією та Україною",
     "Agreement between Ukraine and the Republic of Latvia on long-term support and security commitments.docx": "Угода між Україною та Латвійською Республікою про довгострокову підтримку та безпекові зобов'язання",
     "Agreement on Long-Term Cooperation and Support between Ukraine and the Republic of Croatia.docx": "Угода про довгострокову співпрацю та підтримку між Україною та Республікою Хорватія",
     "Agreement on Security Cooperation and Long-Term Support between the Kingdom of Belgium and Ukraine.docx": "Угода про співробітництво у сфері безпеки та довгострокову підтримку між Королівством Бельгія та Україною",
@@ -96,25 +96,6 @@ ensemble_retriever = EnsembleRetriever(
     weights=[0.5, 0.5] # Даємо однакову вагу обом методам
 )
 print("Fusion Retriever створено.")
-
-
-# --- СТВОРЕННЯ MultiQueryRetriever (КРОК 1) ---
-# Промпт для генерації альтернативних запитів
-QUERY_PROMPT = PromptTemplate(
-    input_variables=["question"],
-    template="""You are an AI language model assistant. Your task is to generate five 
-    different versions of the given user question to retrieve relevant documents from a vector 
-    database. By generating multiple perspectives on the user question, your goal is to help
-    the user overcome some of the limitations of distance-based similarity search. 
-    Provide these alternative questions separated by newlines.
-    Original question: {question}""",
-)
-
-retriever_from_llm = MultiQueryRetriever.from_llm(
-    retriever=vectorstore.as_retriever(search_kwargs={"k": 20}), # Кожен з 5 запитів знайде по 10 фрагментів
-    llm=ChatOpenAI(temperature=0, model_name=LLM_MODEL_CLASSIFY),
-    prompt=QUERY_PROMPT
-)
 
 # --- ПРОМПТ ДЛЯ КЛАСИФІКАЦІЇ ПИТАНЬ (для відсіювання "яка погода?") ---
 classifier_prompt_template = """

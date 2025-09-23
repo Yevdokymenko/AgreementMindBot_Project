@@ -1,5 +1,6 @@
 import os
 import traceback
+import logging
 from fastapi import FastAPI
 from pydantic import BaseModel
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -8,14 +9,19 @@ from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from langchain.retrievers.multi_query import MultiQueryRetriever
+
+# --- НОВІ ІМПОРТИ ДЛЯ FUSION RETRIEVER ---
+from langchain.retrievers import BM25Retriever, EnsembleRetriever
+from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 import logging
+
+load_dotenv()
 
 # Налаштування логування для кращого дебагінгу
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("langchain.retrievers.multi_query").setLevel(logging.INFO)
 
-load_dotenv()
 
 # --- Словник для перетворення назв файлів на офіційні назви угод ---
 DOCUMENT_TITLES = {
@@ -52,13 +58,45 @@ DOCUMENT_TITLES = {
 # --- НАЛАШТУВАННЯ ---
 VECTORSTORE_PATH = "chroma_db"
 LLM_MODEL_MAIN = "gpt-4o"
-LLM_MODEL_MULTI_QUERY = "gpt-4o-mini" # Швидка модель для генерації запитів
+LLM_MODEL_CLASSIFY = "gpt-4o-mini"
 
 # --- ЗАВАНТАЖЕННЯ БАЗИ ЗНАНЬ ---
 print("Завантаження векторної бази знань Chroma...")
 embeddings = OpenAIEmbeddings()
-vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
-print("База знань завантажена.")
+chroma_vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
+
+# --- СТВОРЕННЯ FUSION RETRIEVER ---
+print("Створення Fusion Retriever...")
+
+# 1. Завантажуємо документи ще раз, щоб створити BM25 ретривер
+all_docs = []
+for file in os.listdir("documents"):
+    file_path = os.path.join("documents", file)
+    try:
+        if file.endswith(".pdf"): loader = PyPDFLoader(file_path)
+        elif file.endswith(".docx"): loader = Docx2txtLoader(file_path)
+        else: continue
+        all_docs.extend(loader.load())
+    except Exception as e:
+        print(f"Помилка при завантаженні {file}: {e}")
+
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+split_docs = text_splitter.split_documents(all_docs)
+
+# 2. Ініціалізуємо BM25 ретривер (пошук за ключовими словами)
+bm25_retriever = BM25Retriever.from_documents(split_docs)
+bm25_retriever.k = 15
+
+# 3. Ініціалізуємо векторний ретривер (пошук за змістом)
+chroma_retriever = chroma_vectorstore.as_retriever(search_kwargs={"k": 15})
+
+# 4. Створюємо EnsembleRetriever, який "сплавляє" результати
+ensemble_retriever = EnsembleRetriever(
+    retrievers=[bm25_retriever, chroma_retriever],
+    weights=[0.5, 0.5] # Даємо однакову вагу обом методам
+)
+print("Fusion Retriever створено.")
+
 
 # --- СТВОРЕННЯ MultiQueryRetriever (КРОК 1) ---
 # Промпт для генерації альтернативних запитів
@@ -74,7 +112,7 @@ QUERY_PROMPT = PromptTemplate(
 
 retriever_from_llm = MultiQueryRetriever.from_llm(
     retriever=vectorstore.as_retriever(search_kwargs={"k": 20}), # Кожен з 5 запитів знайде по 10 фрагментів
-    llm=ChatOpenAI(temperature=0, model_name=LLM_MODEL_MULTI_QUERY),
+    llm=ChatOpenAI(temperature=0, model_name=LLM_MODEL_CLASSIFY),
     prompt=QUERY_PROMPT
 )
 
@@ -87,7 +125,7 @@ classifier_prompt_template = """
 Твоя відповідь (тільки 'relevant' або 'irrelevant'):
 """
 CLASSIFIER_PROMPT = PromptTemplate.from_template(classifier_prompt_template)
-classifier_llm = ChatOpenAI(model_name=LLM_MODEL_MULTI_QUERY, temperature=0)
+classifier_llm = ChatOpenAI(model_name=LLM_MODEL_CLASSIFY, temperature=0)
 classifier_chain = LLMChain(llm=classifier_llm, prompt=CLASSIFIER_PROMPT)
 
 # --- ПРОМПТ ДЛЯ ГЕНЕРАЦІЇ ВІДПОВІДІ (КРОК 2) ---
@@ -131,7 +169,7 @@ class QueryRequest(BaseModel):
 @app.post("/query")
 def process_query(request: QueryRequest):
     try:
-        # --- КРОК 1: КЛАСИФІКАЦІЯ ПИТАННЯ ---
+        # --- КРОК 1: КЛАСИФІКАЦІЯ ---
         classification_result = classifier_chain.invoke({"question": request.question})
         classification = classification_result['text'].strip().lower()
 
@@ -146,10 +184,11 @@ def process_query(request: QueryRequest):
             """
             return {"answer": off_topic_response}
 
-        # --- КРОК 2: ЯКЩО РЕЛЕВАНТНЕ, ВИКОРИСТОВУЄМО MultiQueryRetriever для пошуку документів ---
+        # --- КРОК 2: ПОШУК ЗА ДОПОМОГОЮ FUSION RETRIEVER ---
         print(f"Отримано релевантне питання: {request.question}")
-        relevant_docs = retriever_from_llm.invoke(request.question)
-        print(f"Знайдено {len(relevant_docs)} релевантних фрагментів через MultiQueryRetriever.")
+        # Використовуємо наш новий, потужний ретривер
+        relevant_docs = ensemble_retriever.invoke(request.question)
+        print(f"Знайдено {len(relevant_docs)} релевантних фрагментів через Fusion Retriever.")
 
         # --- КРОК 3: ФОРМУЄМО КОНТЕКСТ І ГЕНЕРУЄМО ВІДПОВІДЬ ---
         context_with_metadata = ""
@@ -160,15 +199,12 @@ def process_query(request: QueryRequest):
             doc_title = DOCUMENT_TITLES.get(source_filename, source_filename)
             page_num = doc.metadata.get("page", 0) + 1
             
-            slug = os.path.splitext(source_filename)[0].lower().replace(' ', '-').replace('+', '-')
-            url = f"https://agreementmindbot.win/agreements/{slug}/"
-            if doc_title: # Додаємо тільки якщо назва відома
+            if doc_title:
+                slug = os.path.splitext(source_filename)[0].lower().replace(' ', '-').replace('+', '-')
+                url = f"https://agreementmindbot.win/agreements/{slug}/"
                 unique_sources_for_links[doc_title] = url
             
-            context_with_metadata += f"--- Фрагмент з документу ---\n"
-            context_with_metadata += f"Назва документу: {doc_title}\n"
-            context_with_metadata += f"Сторінка: {page_num}\n"
-            context_with_metadata += f"Зміст: {doc.page_content}\n\n"
+            context_with_metadata += f"--- Фрагмент...\nНазва: {doc_title}\nСторінка: {page_num}\nЗміст: {doc.page_content}\n\n"
         
         main_result = main_chain.invoke({
             "context": context_with_metadata,
@@ -177,10 +213,17 @@ def process_query(request: QueryRequest):
         
         answer_text = main_result['text']
         
+        # ВИПРАВЛЕНА ЛОГІКА ПОСИЛАНЬ
         final_answer = answer_text
-        for title, url in unique_sources_for_links.items():
-            if title in final_answer:
+        # Додаємо блок з посиланнями в кінець відповіді
+        used_titles = {title for title in unique_sources_for_links if title in answer_text}
+        if used_titles:
+            final_answer += "\n\n---\n**Пов'язані документи:**\n"
+            for title in sorted(list(used_titles)):
+                url = unique_sources_for_links[title]
+                # Перетворюємо назву на посилання прямо в тексті та додаємо в список
                 final_answer = final_answer.replace(title, f"<a href='{url}' target='_blank' rel='noopener noreferrer'>{title}</a>")
+                final_answer += f"* <a href='{url}' target='_blank' rel='noopener noreferrer'>{title}</a>\n"
 
         return {"answer": final_answer}
 

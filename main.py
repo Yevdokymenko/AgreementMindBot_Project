@@ -57,27 +57,15 @@ DOCUMENTS_DIR = os.path.join(BASE_DIR, "documents")
 LLM_MODEL_MAIN = "gpt-4o"
 LLM_MODEL_CLASSIFY = "gpt-4o-mini"
 
-# --- ЗАВАНТАЖЕННЯ БАЗИ ЗНАНЬ З УГОДАМИ (КРОК 1) ---
-print("Завантаження векторної бази знань Chroma (для угод)...")
+# --- ЗАВАНТАЖЕННЯ РЕСУРСІВ ---
+print("Завантаження ресурсів...")
 embeddings = OpenAIEmbeddings()
 vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
-retriever = vectorstore.as_retriever(search_kwargs={"k": 50}) 
-print("База знань з угодами завантажена.")
-
-# --- ЗАВАНТАЖЕННЯ ФАЙЛУ-ДОВІДКИ В ПАМ'ЯТЬ (КРОК 2) ---
-print("Завантаження файлу-довідки...")
-# Будуємо абсолютний шлях до папки 'documents' відносно поточного файлу
-# Шлях до поточної папки (напр., /opt/render/project/src/)
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-# "Виходимо" з неї на один рівень вище (до /opt/render/project/)
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-# Тепер шукаємо папку 'documents' там
-DOCUMENTS_DIR = os.path.join(PROJECT_ROOT, "documents")
+retriever = vectorstore.as_retriever(search_kwargs={"k": 50})
 
 reference_loader = Docx2txtLoader(os.path.join(DOCUMENTS_DIR, REFERENCE_FILE_NAME))
-
 reference_text = reference_loader.load()[0].page_content
-print("Файл-довідка завантажено.")
+print("Ресурси завантажено.")
 
 # --- ЛАНЦЮГИ ШІ ---
 classifier_prompt_template = """Проаналізуй питання користувача. Класифікуй його на один з трьох типів:

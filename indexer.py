@@ -8,13 +8,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Будуємо абсолютний шлях до папки, де лежить цей скрипт
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Папка 'documents' знаходиться в тій же директорії
-DOCUMENTS_PATH = os.path.join(BASE_DIR, "documents")
-VECTORSTORE_PATH = os.path.join(BASE_DIR, "chroma_db")
+# --- НАЛАШТУВАННЯ ШЛЯХІВ ---
+# Абсолютний шлях до папки, де лежить цей скрипт (напр., /opt/render/project/src)
+CURRENT_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-REFERENCE_FILE_NAME = "Dovidka_09_2025.docx" 
+# Абсолютний шлях до кореневої папки проєкту (напр., /opt/render/project)
+PROJECT_ROOT_DIR = os.path.dirname(CURRENT_SCRIPT_DIR)
+
+# Тепер будуємо правильні шляхи до наших папок
+DOCUMENTS_PATH = os.path.join(PROJECT_ROOT_DIR, "documents")
+VECTORSTORE_PATH = os.path.join(PROJECT_ROOT_DIR, "chroma_db")
+
+REFERENCE_FILE_NAME = "Dovidka_09_2025.docx"
 
 def create_vector_store():
     print("Починаю обробку угод...")

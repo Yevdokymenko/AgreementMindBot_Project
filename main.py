@@ -1,6 +1,5 @@
 import os
 import traceback
-import logging
 from fastapi import FastAPI
 from pydantic import BaseModel
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -10,15 +9,11 @@ from langchain.chains import LLMChain
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-# --- НОВІ ІМПОРТИ ДЛЯ FUSION RETRIEVER ---
-from langchain.retrievers import BM25Retriever, EnsembleRetriever
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-
 load_dotenv()
 
 # --- Словник для перетворення назв файлів на офіційні назви угод ---
 DOCUMENT_TITLES = {
+    "Dovidka_09_2025.docx": "Зведена довідка по безпекових угодах"
     "2024-02-16-ukraine-sicherheitsvereinbarung-eng-data.pdf": "Угода про співробітництво у сфері безпеки та довгострокову підтримку між Україною та Федеративною Республікою Німеччина",
     "Accord on Support for Ukraine and Cooperation between Ukraine and the Government of Japan.pdf": "Угода про підтримку України та співробітництво між Урядом Японії та Україною",
     "Accordo_Italia-Ucraina_20240224.docx": "Угода про співробітництво у сфері безпеки між Італією та Україною",
@@ -57,36 +52,10 @@ LLM_MODEL_CLASSIFY = "gpt-4o-mini"
 # --- ЗАВАНТАЖЕННЯ БАЗИ ЗНАНЬ ---
 print("Завантаження векторної бази знань Chroma...")
 embeddings = OpenAIEmbeddings()
-chroma_vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
-
-# --- СТВОРЕННЯ FUSION RETRIEVER ---
-print("Створення Fusion Retriever...")
-all_docs = []
-# Цей блок завантажує документи в пам'ять при кожному запуску для BM25.
-# Це нормально для серверів з достатньою RAM, як на Render.
-for file in os.listdir("documents"):
-    file_path = os.path.join("documents", file)
-    try:
-        if file.endswith(".pdf"): loader = PyPDFLoader(file_path)
-        elif file.endswith(".docx"): loader = Docx2txtLoader(file_path)
-        else: continue
-        all_docs.extend(loader.load())
-    except Exception as e:
-        print(f"Помилка при завантаженні {file} для BM25: {e}")
-
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-split_docs = text_splitter.split_documents(all_docs)
-
-bm25_retriever = BM25Retriever.from_documents(split_docs)
-bm25_retriever.k = 15
-
-chroma_retriever = chroma_vectorstore.as_retriever(search_kwargs={"k": 15})
-
-ensemble_retriever = EnsembleRetriever(
-    retrievers=[bm25_retriever, chroma_retriever],
-    weights=[0.5, 0.5]
-)
-print("Fusion Retriever створено.")
+vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
+# Збільшуємо пошук до максимуму, щоб знайти все, що потрібно
+retriever = vectorstore.as_retriever(search_kwargs={"k": 50}) 
+print("База знань завантажена.")
 
 # --- ПРОМПТИ ---
 classifier_prompt_template = """
@@ -100,19 +69,24 @@ CLASSIFIER_PROMPT = PromptTemplate.from_template(classifier_prompt_template)
 classifier_llm = ChatOpenAI(model_name=LLM_MODEL_CLASSIFY, temperature=0)
 classifier_chain = LLMChain(llm=classifier_llm, prompt=CLASSIFIER_PROMPT)
 
+# ФІНАЛЬНИЙ ПРОМПТ, НАВЧЕНИЙ ВИКОРИСТОВУВАТИ ДОВІДКУ
 main_prompt_template = """
-Ти - AgreementMindBot, надточний юридичний асистент. Твоя задача - аналізувати надані фрагменти з безпекових угод України та давати вичерпні, структуровані відповіді.
+Ти - AgreementMindBot, експерт-аналітик з безпекових угод України. Тобі надано фрагменти з угод та, що найважливіше, фрагменти зі "Зведеної довідки по безпекових угодах".
 
-**ПРАВИЛА ФОРМАТУВАННЯ:**
-- Замість "**Узагальнююча відповідь:**" використовуй фразу "**Якщо коротко:**".
-- Замість "**Детальний список:**" використовуй фразу "**Деталі:**".
-- Використовуй Markdown для форматування: `**жирний**` для заголовків.
+**ТВОЯ ГОЛОВНА СТРАТЕГІЯ:**
+1.  **ПЕРШ ЗА ВСЕ, ШУКАЙ ВІДПОВІДЬ У "ЗВЕДЕНІЙ ДОВІДЦІ"**. Вона містить узагальнену та структуровану інформацію.
+2.  **ПОТІМ, ВИКОРИСТОВУЙ ТЕКСТИ УГОД ДЛЯ ПОШУКУ КОНКРЕТНИХ ЦИТАТ**, щоб підтвердити інформацію, знайдену в довідці.
 
-**ПРАВИЛА ГЕНЕРАЦІЇ ВІДПОВІДІ:**
-1.  **ПОВНОТА:** Якщо питання загальне (наприклад, "Які країни підписали угоди?"), твоя відповідь ПОВИННА базуватися на ВСІХ наданих фрагментах, щоб скласти максимально повний список. Не обмежуйся кількома першими знайденими.
-2.  **СТРУКТУРА:** Завжди надавай відповідь у вигляді списку.
-3.  **ЦИТАТИ:** Для КОЖНОГО пункту списку ОБОВ'ЯЗКОВО знайди та наведи відповідну цитату з контексту. Якщо ти не можеш знайти пряму цитату для якогось пункту, НЕ ДОДАВАЙ цей пункт до відповіді.
-4.  **ДЖЕРЕЛО:** У джерелі вказуй повну назву документа. Спробуй також визначити розділ або статтю з тексту фрагмента і додати її. Наприклад: `Джерело: Угода... між Україною та Францією (Part II. COOPERATION IN THE SECURITY FIELD)`.
+**ПРАВИЛА ВІДПОВІДІ:**
+- Починай з короткого резюме ("**Якщо коротко:**").
+- Основну інформацію подавай у вигляді списку під заголовком "**Деталі:**".
+- Для КОЖНОГО пункту списку ОБОВ'ЯЗКОВО надавай цитату з ОРИГІНАЛЬНОЇ УГОДИ (не з довідки!) у розділі "Джерела та цитати".
+- Якщо не можеш знайти цитату для якогось пункту, НЕ додавай цей пункт до відповіді.
+- Вказуй повну назву документа та, якщо можливо, розділ.
+- Форматуй відповідь за допомогою Markdown.
+
+**ОСОБЛИВА ІНСТРУКЦІЯ для питання "Хто підписав угоди?":**
+Спираючись на "Зведену довідку", склади ПОВНИЙ список усіх країн. Для кожної країни вкажи підписанта, якщо він згаданий у довідці або фрагментах угод.
 
 ---
 НАДАНІ ФРАГМЕНТИ:
@@ -120,9 +94,8 @@ main_prompt_template = """
 
 ПИТАННЯ КОРИСТУВАЧА: {question}
 
-ТВОЯ СТРУКТУРОВАНА ТА ДЕТАЛЬНА ВІДПОВІДЬ:
+ТВОЯ ВІДПОВІДЬ:
 """
-
 MAIN_PROMPT = PromptTemplate(template=main_prompt_template, input_variables=["context", "question"])
 main_llm = ChatOpenAI(model_name=LLM_MODEL_MAIN, temperature=0.1)
 main_chain = LLMChain(llm=main_llm, prompt=MAIN_PROMPT)
@@ -137,6 +110,7 @@ class QueryRequest(BaseModel):
 @app.post("/query")
 def process_query(request: QueryRequest):
     try:
+        # Крок 1: Класифікація
         classification_result = classifier_chain.invoke({"question": request.question})
         classification = classification_result['text'].strip().lower()
 
@@ -151,20 +125,18 @@ def process_query(request: QueryRequest):
             """
             return {"answer": off_topic_response}
 
-        # --- КРОК 2: ПОШУК ЗА ДОПОМОГОЮ FUSION RETRIEVER ---
-        print(f"Отримано релевантне питання: {request.question}")
-        relevant_docs = ensemble_retriever.invoke(request.question)
-        print(f"Знайдено {len(relevant_docs)} релевантних фрагментів через Fusion Retriever.")
-
+        # Крок 2: Пошук та генерація
+        relevant_docs = retriever.invoke(request.question)
+        
         context_with_metadata = ""
         unique_sources_for_links = {}
 
         for doc in relevant_docs:
             source_filename = os.path.basename(doc.metadata.get("source", "N/A"))
-            doc_title = DOCUMENT_TITLES.get(source_filename, "Невідомий документ")
+            doc_title = DOCUMENT_TITLES.get(source_filename, source_filename)
             page_num = doc.metadata.get("page", 0) + 1
             
-            if doc_title != "Невідомий документ":
+            if doc_title:
                 slug = os.path.splitext(source_filename)[0].lower().replace(' ', '-').replace('+', '-')
                 url = f"https://agreementmindbot.win/agreements/{slug}/"
                 unique_sources_for_links[doc_title] = url
@@ -174,13 +146,15 @@ def process_query(request: QueryRequest):
         main_result = main_chain.invoke({"context": context_with_metadata, "question": request.question})
         answer_text = main_result['text']
         
+        # Логіка посилань
         final_answer = answer_text
         used_titles = {title for title, url in unique_sources_for_links.items() if title in answer_text}
         if used_titles:
             final_answer += "\n\n---\n**Пов'язані документи:**"
             for title in sorted(list(used_titles)):
-                url = unique_sources_for_links[title]
-                final_answer += f"\n* [{title}]({url})"
+                if title != "Зведена довідка по безпекових угодах": # Не показуємо посилання на довідку
+                    url = unique_sources_for_links[title]
+                    final_answer += f"\n* [{title}]({url})"
 
         return {"answer": final_answer}
 

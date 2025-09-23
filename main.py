@@ -8,9 +8,6 @@ from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from langchain.retrievers import BM25Retriever, EnsembleRetriever
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 load_dotenv()
 
@@ -52,44 +49,13 @@ VECTORSTORE_PATH = "chroma_db"
 LLM_MODEL_MAIN = "gpt-4o"
 LLM_MODEL_CLASSIFY = "gpt-4o-mini"
 
-# --- ЗАВАНТАЖЕННЯ БАЗИ ЗНАНЬ ТА СТВОРЕННЯ FUSION RETRIEVER ---
-print("Завантаження ресурсів...")
+# --- ЗАВАНТАЖЕННЯ БАЗИ ЗНАНЬ ---
+print("Завантаження векторної бази знань Chroma...")
 embeddings = OpenAIEmbeddings()
-chroma_vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
-
-all_docs = []
-for file in os.listdir("documents"):
-    file_path = os.path.join("documents", file)
-    try:
-        if file.endswith(".pdf"): loader = PyPDFLoader(file_path)
-        elif file.endswith(".docx"): loader = Docx2txtLoader(file_path)
-        else: continue
-        all_docs.extend(loader.load())
-    except Exception:
-        pass # Ігноруємо помилки завантаження для BM25, якщо файл пошкоджений
-
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-split_docs = text_splitter.split_documents(all_docs)
-
-bm25_retriever = BM25Retriever.from_documents(split_docs)
-bm25_retriever.k = 25 # Збільшуємо пошук
-
-chroma_retriever = chroma_vectorstore.as_retriever(search_kwargs={"k": 25})
-
-ensemble_retriever = EnsembleRetriever(retrievers=[bm25_retriever, chroma_retriever], weights=[0.5, 0.5])
-print("Ресурси завантажено.")
-
-# --- ПРОМПТИ ---
-classifier_prompt_template = """
-Проаналізуй питання користувача. Твоя задача - класифікувати його.
-Якщо питання стосується безпекових угод, політики, військової допомоги, міжнародних відносин України, відповідай ТІЛЬКИ одним словом: 'relevant'.
-Якщо питання є загальним, побутовим, не пов'язаним з темою (наприклад, "як справи?", "яка погода?"), відповідай ТІЛЬКИ одним словом: 'irrelevant'.
-Питання користувача: "{question}"
-Твоя відповідь (тільки 'relevant' або 'irrelevant'):
-"""
-CLASSIFIER_PROMPT = PromptTemplate.from_template(classifier_prompt_template)
-classifier_llm = ChatOpenAI(model_name=LLM_MODEL_CLASSIFY, temperature=0)
-classifier_chain = LLMChain(llm=classifier_llm, prompt=CLASSIFIER_PROMPT)
+vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
+# ВИКОРИСТОВУЄМО ПРОСТИЙ РЕТРИВЕР, АЛЕ З ВЕЛИКИМ КОНТЕКСТОМ
+retriever = vectorstore.as_retriever(search_kwargs={"k": 100}) 
+print("База знань завантажена.")
 
 # --- ЛАНЦЮГИ ШІ ---
 classifier_prompt_template = """Проаналізуй питання користувача. Класифікуй його на один з трьох типів:
@@ -102,16 +68,25 @@ classifier_prompt_template = """Проаналізуй питання корис
 CLASSIFIER_PROMPT = PromptTemplate.from_template(classifier_prompt_template)
 classifier_chain = LLMChain(llm=ChatOpenAI(model_name=LLM_MODEL_CLASSIFY, temperature=0), prompt=CLASSIFIER_PROMPT)
 
-main_prompt_template = """Ти - AgreementMindBot, експерт-аналітик з безпекових угод України.
+# ФІНАЛЬНИЙ ПРОМПТ
+main_prompt_template = """
+Ти - AgreementMindBot, експерт-аналітик з безпекових угод України.
+Тобі надано фрагменти з угод та, що найважливіше, фрагменти зі "Зведеної довідки по безпекових угодах".
 
-**ЗАБОРОНА:** НІКОЛИ не згадуй у своїй відповіді "Зведену довідку" або "надані фрагменти". Спілкуйся так, наче ти знаєш все сам.
+**ТВОЯ СТРАТЕГІЯ:**
+1.  **ПЕРШ ЗА ВСЕ, ШУКАЙ ВІДПОВІДЬ У "ЗВЕДЕНІЙ ДОВІДЦІ"**. Це твоє головне джерело для структури відповіді.
+2.  **ПОТІМ, ВИКОРИСТОВУЙ ТЕКСТИ УГОД ДЛЯ ПОШУКУ КОНКРЕТНИХ ЦИТАТ**, щоб підтвердити кожен пункт, знайдений у довідці.
 
-**ІНСТРУКЦІЯ:**
-1. Почни з короткого резюме ("**Якщо коротко:**").
-2. Подай основну інформацію у вигляді списку під заголовком "**Деталі:**".
-3. Для КОЖНОГО пункту списку ОБОВ'ЯЗКОВО знайди та наведи цитату з ОРИГІНАЛЬНОЇ УГОДИ у розділі "Джерела та цитати". Якщо не можеш знайти цитату, не вигадуй пункт.
-4. Вказуй повну назву документа та, якщо можливо, розділ.
-5. В кінці відповіді додай дисклеймер: "Відповідь сформована ШІ за результатами опрацювання текстів Безпекових угод. Рекомендується самостійно ознайомитись з текстами відповідних документів."
+**ПРАВИЛА ВІДПОВІДІ:**
+- Починай з короткого резюме ("**Якщо коротко:**").
+- Основну інформацію подавай у вигляді списку під заголовком "**Деталі:**".
+- **ЗАБОРОНА:** Ніколи не згадуй "Зведену довідку" або "надані фрагменти".
+- **ОБОВ'ЯЗКОВО:** Для кожного пункту списку надай цитату з ОРИГІНАЛЬНОЇ УГОДИ.
+- Вказуй повну назву документа та розділ.
+- В кінці додай дисклеймер: "Відповідь сформована ШІ...".
+
+**ОСОБЛИВА ІНСТРУКЦІЯ для питання "Хто підписав угоди?":**
+Спираючись на "Зведену довідку", склади ПОВНИЙ список усіх країн, які ти там знайдеш. Потім для кожної країни знайди ім'я підписанта в текстах угод.
 
 ---
 НАДАНІ ДАНІ:
@@ -149,44 +124,34 @@ def process_query(request: QueryRequest):
             return {"answer": off_topic_response}
 
         context_with_metadata = ""
-        relevant_docs = []
+        relevant_docs = retriever.invoke(request.question)
         
-        if "general_listing" in classification:
-            print("Стратегія: Загальний перелік. Використовуємо всі документи.")
-            # Для загальних питань ми не покладаємося на ретривер, а даємо ШІ список всіх угод
-            all_titles = [title for filename, title in DOCUMENT_TITLES.items() if "довідка" not in title.lower()]
-            context_with_metadata = "СПИСОК УСІХ УГОД:\n" + "\n".join(f"- {title}" for title in all_titles)
-            # Додамо трохи контексту з ретривера, щоб допомогти знайти підписантів
-            relevant_docs = ensemble_retriever.invoke(request.question)
-
-        else: # 'specific_question'
-            print(f"Стратегія: Конкретне питання. Використовуємо Fusion Retriever.")
-            relevant_docs = ensemble_retriever.invoke(request.question)
-
+        context_with_metadata = ""
         unique_sources_for_links = {}
+
         for doc in relevant_docs:
             source_filename = os.path.basename(doc.metadata.get("source", "N/A"))
             doc_title = DOCUMENT_TITLES.get(source_filename, "Невідомий документ")
             page_num = doc.metadata.get("page", 0) + 1
             
-            if doc_title != "Невідомий документ":
+            if doc_title != "Невідомий документ" and "довідка" not in doc_title.lower():
                 slug = os.path.splitext(source_filename)[0].lower().replace(' ', '-').replace('+', '-')
                 url = f"https://agreementmindbot.win/agreements/{slug}/"
                 unique_sources_for_links[doc_title] = url
             
-            context_with_metadata += f"\n\n--- Фрагмент ---\nНазва: {doc_title}\nЗміст: {doc.page_content}"
-
+            context_with_metadata += f"--- Фрагмент ---\nНазва: {doc_title}\nЗміст: {doc.page_content}\n\n"
+        
         main_result = main_chain.invoke({"context": context_with_metadata, "question": request.question})
         answer_text = main_result['text']
         
         final_answer = answer_text
         used_titles = {title for title, url in unique_sources_for_links.items() if title in answer_text}
+        
         if used_titles:
             final_answer += "\n\n---\n**Пов'язані документи:**"
             for title in sorted(list(used_titles)):
-                if "довідка" not in title.lower():
-                    url = unique_sources_for_links[title]
-                    final_answer += f"\n* [{title}]({url})"
+                url = unique_sources_for_links[title]
+                final_answer += f"\n* [{title}]({url})"
 
         return {"answer": final_answer}
 

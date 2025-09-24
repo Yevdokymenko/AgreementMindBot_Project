@@ -10,3 +10,6 @@ __pycache__/
 
 # Згенерована база даних Faiss
 faiss_index/
+
+# Ігноруємо базу даних ChromaDB
+chroma_db/

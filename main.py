@@ -8,7 +8,9 @@ from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from langchain_community.document_loaders import Docx2txtLoader
+from langchain.retrievers import BM25Retriever, EnsembleRetriever
+from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 load_dotenv()
 
@@ -53,12 +55,29 @@ DOCUMENTS_DIR = os.path.join(BASE_DIR, "documents")
 LLM_MODEL_MAIN = "gpt-4o"
 LLM_MODEL_CLASSIFY = "gpt-4o-mini"
 
-# --- ЗАВАНТАЖЕННЯ РЕСУРСІВ ---
+# --- ЗАВАНТАЖЕННЯ РЕСУРСІВ ТА СТВОРЕННЯ FUSION RETRIEVER ---
 print("Завантаження ресурсів...")
 embeddings = OpenAIEmbeddings()
 vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
-# ЗБІЛЬШУЄМО ПОШУК ДО МАКСИМУМУ
-retriever = vectorstore.as_retriever(search_kwargs={"k": 100}) 
+
+all_docs = []
+for file in os.listdir(DOCUMENTS_DIR):
+    file_path = os.path.join(DOCUMENTS_DIR, file)
+    try:
+        if file.endswith(".pdf"): loader = PyPDFLoader(file_path)
+        elif file.endswith(".docx"): loader = Docx2txtLoader(file_path)
+        else: continue
+        all_docs.extend(loader.load())
+    except Exception as e:
+        print(f"Помилка при завантаженні {file} для BM25: {e}")
+
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+split_docs = text_splitter.split_documents(all_docs)
+
+bm25_retriever = BM25Retriever.from_documents(split_docs)
+bm25_retriever.k = 20
+chroma_retriever = vectorstore.as_retriever(search_kwargs={"k": 20})
+ensemble_retriever = EnsembleRetriever(retrievers=[bm25_retriever, chroma_retriever], weights=[0.5, 0.5])
 
 reference_loader = Docx2txtLoader(os.path.join(DOCUMENTS_DIR, REFERENCE_FILE_NAME))
 reference_text = reference_loader.load()[0].page_content
@@ -75,7 +94,6 @@ classifier_prompt_template = """Проаналізуй питання корис
 CLASSIFIER_PROMPT = PromptTemplate.from_template(classifier_prompt_template)
 classifier_chain = LLMChain(llm=ChatOpenAI(model_name=LLM_MODEL_CLASSIFY, temperature=0), prompt=CLASSIFIER_PROMPT)
 
-# ФІНАЛЬНИЙ ПРОМПТ
 main_prompt_template = """
 Ти - AgreementMindBot, експерт-аналітик з безпекових угод України.
 Тобі надано фрагменти з угод та, що найважливіше, зі "Зведеної довідки".
@@ -113,7 +131,9 @@ app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 class QueryRequest(BaseModel):
-    question: str; user_name: str; language: str
+    question: str
+    user_name: str
+    language: str
 
 @app.post("/query")
 def process_query(request: QueryRequest):

@@ -156,19 +156,28 @@ def process_query(request: QueryRequest):
             
             context_with_metadata += f"--- Фрагмент ---\nНазва: {doc_title}\nЗміст: {doc.page_content}\n\n"
         
-        main_result = main_chain.invoke({"context": context_with_metadata, "question": request.question})
-        answer_text = main_result['text']
-        
-        final_answer = answer_text
-        used_titles = {title for title, url in unique_sources_for_links.items() if title in answer_text}
-        
-        if used_titles:
-            final_answer += "\n\n---\n**Пов'язані документи:**"
-            for title in sorted(list(used_titles)):
-                url = unique_sources_for_links[title]
-                final_answer += f"\n* [{title}]({url})"
+            # --- КРОК 3: ГЕНЕРАЦІЯ ВІДПОВІДІ ---
+            main_result = main_chain.invoke({
+                "context": context_with_metadata,
+                "question": request.question
+            })
+            answer_text = main_result['text']
 
-        return {"answer": final_answer}
+            # --- КРОК 4: ДОДАВАННЯ ПОСИЛАНЬ (ВИПРАВЛЕНА ВЕРСІЯ) ---
+            final_answer = answer_text
+
+            # Знаходимо, які з унікальних джерел були згадані у відповіді
+            used_titles = {title for title, url in unique_sources_for_links.items() if title in answer_text}
+
+            # Якщо хоча б один документ був використаний, додаємо блок з посиланнями
+            if used_titles:
+                final_answer += "\n\n---\n**Пов'язані документи:**"
+                for title in sorted(list(used_titles)):
+                    url = unique_sources_for_links[title]
+                    # Додаємо посилання у форматі Markdown
+                    final_answer += f"\n* [{title}]({url})"
+
+            return {"answer": final_answer}
 
     except Exception as e:
         print(f"!!! ПОМИЛКА: {e} !!!")

@@ -58,7 +58,6 @@ print("Завантаження ресурсів...")
 embeddings = OpenAIEmbeddings()
 vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
 retriever = vectorstore.as_retriever(search_kwargs={"k": 100}) 
-
 reference_loader = Docx2txtLoader(os.path.join(DOCUMENTS_DIR, REFERENCE_FILE_NAME))
 reference_text = reference_loader.load()[0].page_content
 print("Ресурси завантажено.")
@@ -135,7 +134,7 @@ def process_query(request: QueryRequest):
             return {"answer": off_topic_response}
 
         context_with_metadata = ""
-        unique_sources_for_links = {} # Створюємо порожній словник
+        unique_sources_for_links = {}
         
         if "general_listing" in classification:
             print("Стратегія: Загальний перелік. Використовую довідку + пошук.")
@@ -149,7 +148,6 @@ def process_query(request: QueryRequest):
         for doc in relevant_docs:
             source_filename = os.path.basename(doc.metadata.get("source", "N/A"))
             doc_title = DOCUMENT_TITLES.get(source_filename, "Невідомий документ")
-            page_num = doc.metadata.get("page", 0) + 1
             
             if doc_title != "Невідомий документ" and "довідка" not in doc_title.lower():
                 slug = os.path.splitext(source_filename)[0].lower().replace(' ', '-').replace('+', '-')

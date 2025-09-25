@@ -57,7 +57,6 @@ LLM_MODEL_CLASSIFY = "gpt-4o-mini"
 print("Завантаження ресурсів...")
 embeddings = OpenAIEmbeddings()
 vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
-# ЗБІЛЬШУЄМО ПОШУК ДО МАКСИМУМУ
 retriever = vectorstore.as_retriever(search_kwargs={"k": 100}) 
 
 reference_loader = Docx2txtLoader(os.path.join(DOCUMENTS_DIR, REFERENCE_FILE_NAME))
@@ -73,7 +72,9 @@ classifier_prompt_template = """Проаналізуй питання корис
 Питання: "{question}"
 Тип:"""
 CLASSIFIER_PROMPT = PromptTemplate.from_template(classifier_prompt_template)
-classifier_chain = LLMChain(llm=ChatOpenAI(model_name=LLM_MODEL_CLASSIFY, temperature=0), prompt=CLASSIFIER_PROMPT)
+classifier_llm = ChatOpenAI(model_name=LLM_MODEL_CLASSIFY, temperature=0)
+classifier_chain = LLMChain(llm=classifier_llm, prompt=CLASSIFIER_PROMPT)
+
 
 main_prompt_template = """
 Ти - AgreementMindBot, експерт-аналітик з безпекових угод України.
@@ -112,7 +113,9 @@ app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 class QueryRequest(BaseModel):
-    question: str; user_name: str; language: str
+    question: str
+    user_name: str
+    language: str
 
 @app.post("/query")
 def process_query(request: QueryRequest):
@@ -121,24 +124,32 @@ def process_query(request: QueryRequest):
         classification = classification_result['text'].strip().lower()
 
         if "irrelevant" in classification:
-            off_topic_response = """...""" # ВАША ВІДПОВІДЬ З КНОПКАМИ
+            off_topic_response = """
+            На жаль, це питання не стосується безпекових угод України. Можливо, вас зацікавить:<br>
+            <div class="suggestions-container">
+                <button class="suggested-question">Які країни підписали угоди?</button>
+                <button class="suggested-question">Які зобов'язання у сфері кібербезпеки?</button>
+                <button class="suggested-question">Як угоди сприяють інтеграції в НАТО?</button>
+            </div>
+            """
             return {"answer": off_topic_response}
 
         context_with_metadata = ""
-        unique_sources_for_links = {}
-
+        unique_sources_for_links = {} # Створюємо порожній словник
+        
         if "general_listing" in classification:
-            print("Стратегія: Загальний перелік. Використовую довідку + Fusion пошук.")
+            print("Стратегія: Загальний перелік. Використовую довідку + пошук.")
             context_with_metadata = f"--- Фрагмент ---\nНазва: Зведена довідка по безпекових угодах\nЗміст: {reference_text}\n\n"
         else:
-            print(f"Стратегія: Конкретне питання. Використовую Fusion пошук.")
+            print(f"Стратегія: Конкретне питання. Використовую векторний пошук.")
 
-        relevant_docs = ensemble_retriever.invoke(request.question)
-        print(f"Знайдено {len(relevant_docs)} релевантних фрагментів через Fusion Retriever.")
+        relevant_docs = retriever.invoke(request.question)
+        print(f"Знайдено {len(relevant_docs)} релевантних фрагментів.")
         
         for doc in relevant_docs:
             source_filename = os.path.basename(doc.metadata.get("source", "N/A"))
             doc_title = DOCUMENT_TITLES.get(source_filename, "Невідомий документ")
+            page_num = doc.metadata.get("page", 0) + 1
             
             if doc_title != "Невідомий документ" and "довідка" not in doc_title.lower():
                 slug = os.path.splitext(source_filename)[0].lower().replace(' ', '-').replace('+', '-')
@@ -146,7 +157,7 @@ def process_query(request: QueryRequest):
                 unique_sources_for_links[doc_title] = url
             
             context_with_metadata += f"--- Фрагмент ---\nНазва: {doc_title}\nЗміст: {doc.page_content}\n\n"
-
+        
         main_result = main_chain.invoke({"context": context_with_metadata, "question": request.question})
         answer_text = main_result['text']
         

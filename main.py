@@ -60,23 +60,23 @@ print("Завантаження ресурсів...")
 embeddings = OpenAIEmbeddings()
 vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
 
-all_docs = []
+all_docs_for_bm25 = []
 for file in os.listdir(DOCUMENTS_DIR):
     file_path = os.path.join(DOCUMENTS_DIR, file)
     try:
         if file.endswith(".pdf"): loader = PyPDFLoader(file_path)
         elif file.endswith(".docx"): loader = Docx2txtLoader(file_path)
         else: continue
-        all_docs.extend(loader.load())
+        all_docs_for_bm25.extend(loader.load())
     except Exception as e:
         print(f"Помилка при завантаженні {file} для BM25: {e}")
 
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-split_docs = text_splitter.split_documents(all_docs)
+split_docs = text_splitter.split_documents(all_docs_for_bm25)
 
 bm25_retriever = BM25Retriever.from_documents(split_docs)
-bm25_retriever.k = 20
-chroma_retriever = vectorstore.as_retriever(search_kwargs={"k": 20})
+bm25_retriever.k = 25
+chroma_retriever = vectorstore.as_retriever(search_kwargs={"k": 25})
 ensemble_retriever = EnsembleRetriever(retrievers=[bm25_retriever, chroma_retriever], weights=[0.5, 0.5])
 
 reference_loader = Docx2txtLoader(os.path.join(DOCUMENTS_DIR, REFERENCE_FILE_NAME))
@@ -131,48 +131,33 @@ app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 class QueryRequest(BaseModel):
-    question: str
-    user_name: str
-    language: str
+    question: str; user_name: str; language: str
 
 @app.post("/query")
 def process_query(request: QueryRequest):
     try:
-        # --- КРОК 1: КЛАСИФІКАЦІЯ ПИТАННЯ ---
         classification_result = classifier_chain.invoke({"question": request.question})
         classification = classification_result['text'].strip().lower()
 
-        # Якщо питання нерелевантне, одразу повертаємо відповідь з кнопками
         if "irrelevant" in classification:
-            off_topic_response = """
-            На жаль, це питання не стосується безпекових угод України. Можливо, вас зацікавить:<br>
-            <div class="suggestions-container">
-                <button class="suggested-question">Які країни підписали угоди?</button>
-                <button class="suggested-question">Які зобов'язання у сфері кібербезпеки?</button>
-                <button class="suggested-question">Як угоди сприяють інтеграції в НАТО?</button>
-            </div>
-            """
+            off_topic_response = """...""" # ВАША ВІДПОВІДЬ З КНОПКАМИ
             return {"answer": off_topic_response}
 
-        # --- КРОК 2: ВИБІР СТРАТЕГІЇ ТА ФОРМУВАННЯ КОНТЕКСТУ ---
         context_with_metadata = ""
         unique_sources_for_links = {}
-        
-        if "general_listing" in classification:
-            print("Стратегія: Загальний перелік. Використовую довідку + пошук.")
-            # Спочатку додаємо в контекст ВЕСЬ текст довідки
-            context_with_metadata = f"--- Фрагмент ---\nНазва: Зведена довідка по безпекових угодах\nЗміст: {reference_text}\n\n"
-            # Потім додаємо результати звичайного пошуку, щоб знайти додаткові деталі та цитати
-            relevant_docs = retriever.invoke(request.question)
-        else: # 'specific_question'
-            print(f"Стратегія: Конкретне питання. Використовую векторний пошук.")
-            relevant_docs = retriever.invoke(request.question)
 
-        # Обробляємо знайдені документи (або для збагачення довідки, або як основне джерело)
+        if "general_listing" in classification:
+            print("Стратегія: Загальний перелік. Використовую довідку + Fusion пошук.")
+            context_with_metadata = f"--- Фрагмент ---\nНазва: Зведена довідка по безпекових угодах\nЗміст: {reference_text}\n\n"
+        else:
+            print(f"Стратегія: Конкретне питання. Використовую Fusion пошук.")
+
+        relevant_docs = ensemble_retriever.invoke(request.question)
+        print(f"Знайдено {len(relevant_docs)} релевантних фрагментів через Fusion Retriever.")
+        
         for doc in relevant_docs:
             source_filename = os.path.basename(doc.metadata.get("source", "N/A"))
             doc_title = DOCUMENT_TITLES.get(source_filename, "Невідомий документ")
-            page_num = doc.metadata.get("page", 0) + 1
             
             if doc_title != "Невідомий документ" and "довідка" not in doc_title.lower():
                 slug = os.path.splitext(source_filename)[0].lower().replace(' ', '-').replace('+', '-')
@@ -180,15 +165,10 @@ def process_query(request: QueryRequest):
                 unique_sources_for_links[doc_title] = url
             
             context_with_metadata += f"--- Фрагмент ---\nНазва: {doc_title}\nЗміст: {doc.page_content}\n\n"
-        
-        # --- КРОК 3: ГЕНЕРАЦІЯ ВІДПОВІДІ ---
-        main_result = main_chain.invoke({
-            "context": context_with_metadata,
-            "question": request.question
-        })
+
+        main_result = main_chain.invoke({"context": context_with_metadata, "question": request.question})
         answer_text = main_result['text']
         
-        # --- КРОК 4: ДОДАВАННЯ ПОСИЛАНЬ ---
         final_answer = answer_text
         used_titles = {title for title, url in unique_sources_for_links.items() if title in answer_text}
         

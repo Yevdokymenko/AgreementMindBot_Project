@@ -23,7 +23,7 @@ DOCUMENT_TITLES = {
     "Agreement on Security Cooperation and Long-Term Support between the Kingdom of Belgium and Ukraine.docx": "Угода про співробітництво у сфері безпеки та довгострокову підтримку між Королівством Бельгія та Україною",
     "agreement-on-security-cooperation-and-long-time-suppert-no-ukr.pdf": "Угода про співробітництво у сфері безпеки та довгострокову підтримку між Королівством Норвегія та Україною",
     "agreement-on-security-cooperation-between-sweden-and-ukraine.pdf": "Угода про співробітництво у сфері безпеки між Швецією та Україною",
-    "Agreement on security cooperation and long-term support between Ukraine and Denmark.pdf": "Угода про співробітництво у сфері безпеки та довгострокову підтримку між Україною та Данією",
+    "Agreement on security cooperation and long-term support between Ukraine and Denmark.docx": "Угода про співробітництво у сфері безпеки та довгострокову підтримку між Україною та Данією",
     "Agreement on Security Cooperation and Long-term Support between Ukraine and Estonia.docx": "Угода про співробітництво у сфері безпеки та довгострокову підтримку між Україною та Естонією",
     "Agreement on Security Cooperation and Long-Term Support between Ukraine and Iceland.docx": "Угода про співробітництво у сфері безпеки та довгострокову підтримку між Україною та Ісландією",
     "Agreement on Security Cooperation and Long-Term Support Between Ukraine and the Czech Republic.docx": "Угода про співробітництво у сфері безпеки та довгострокову підтримку між Україною та Чеською Республікою",
@@ -71,17 +71,15 @@ classifier_prompt_template = """Проаналізуй питання корис
 Питання: "{question}"
 Тип:"""
 CLASSIFIER_PROMPT = PromptTemplate.from_template(classifier_prompt_template)
-classifier_llm = ChatOpenAI(model_name=LLM_MODEL_CLASSIFY, temperature=0)
-classifier_chain = LLMChain(llm=classifier_llm, prompt=CLASSIFIER_PROMPT)
-
+classifier_chain = LLMChain(llm=ChatOpenAI(model_name=LLM_MODEL_CLASSIFY, temperature=0), prompt=CLASSIFIER_PROMPT)
 
 main_prompt_template = """
 Ти - AgreementMindBot, експерт-аналітик з безпекових угод України.
 Тобі надано фрагменти з угод та, що найважливіше, зі "Зведеної довідки".
 
 **ТВОЯ СТРАТЕГІЯ:**
-1.  **ПЕРШ ЗА ВСЕ, ШУКАЙ ВІДПОВІДЬ У "ЗВЕДЕНІЙ ДОВІДЦІ"**. Вона містить узагальнену інформацію.
-2.  **ПОТІМ, ВИКОРИСТОВУЙ ТЕКСТИ УГОД ДЛЯ ПОШУКУ КОНКРЕТНИХ ЦИТАТ**, щоб підтвердити кожен пункт.
+1.  **ПЕРШ ЗА ВСЕ, ШУКАЙ ВІДПОВІДЬ У "ЗВЕДЕНІЙ ДОВІДЦІ"**. Вона містить узагальнену та структуровану інформацію. Це твоє головне джерело для структури відповіді.
+2.  **ПОТІМ, ВИКОРИСТОВУЙ ТЕКСТИ УГОД ДЛЯ ПОШУКУ КОНКРЕТНИХ ЦИТАТ**, щоб підтвердити кожен пункт, знайдений у довідці.
 
 **ПРАВИЛА ВІДПОВІДІ:**
 - Починай з короткого резюме ("**Якщо коротко:**").
@@ -92,8 +90,8 @@ main_prompt_template = """
   > [Цитата англійською мовою, як вона є в документі]
   **Переклад:**
   > [Твій переклад цієї цитати українською]
-- Вказуй повну назву документа та розділ.
-- В кінці додай дисклеймер: "Відповідь сформована ШІ...".
+- Вказуй повну назву документа та розділ, якщо він є у фрагменті.
+- В кінці всієї відповіді додай дисклеймер: "Відповідь сформована ШІ за результатами опрацювання текстів Безпекових угод. Рекомендується самостійно ознайомитись з текстами відповідних документів."
 
 **ОСОБЛИВА ІНСТРУКЦІЯ для питання "Хто підписав угоди?":**
 Спираючись на "Зведену довідку", склади ПОВНИЙ список усіх країн. Для кожної країни знайди ім'я підписанта в текстах угод.
@@ -101,7 +99,9 @@ main_prompt_template = """
 ---
 НАДАНІ ДАНІ:
 {context}
-ПИТАНЯ КОРИСТУВАЧА: {question}
+
+ПИТАННЯ КОРИСТУВАЧА: {question}
+
 ТВОЯ ВІДПОВІДЬ:
 """
 MAIN_PROMPT = PromptTemplate(template=main_prompt_template, input_variables=["context", "question"])
@@ -139,7 +139,7 @@ def process_query(request: QueryRequest):
         if "general_listing" in classification:
             print("Стратегія: Загальний перелік. Використовую довідку + пошук.")
             context_with_metadata = f"--- Фрагмент ---\nНазва: Зведена довідка по безпекових угодах\nЗміст: {reference_text}\n\n"
-        else:
+        else: # 'specific_question'
             print(f"Стратегія: Конкретне питання. Використовую векторний пошук.")
 
         relevant_docs = retriever.invoke(request.question)
@@ -156,28 +156,19 @@ def process_query(request: QueryRequest):
             
             context_with_metadata += f"--- Фрагмент ---\nНазва: {doc_title}\nЗміст: {doc.page_content}\n\n"
         
-            # --- КРОК 3: ГЕНЕРАЦІЯ ВІДПОВІДІ ---
-            main_result = main_chain.invoke({
-                "context": context_with_metadata,
-                "question": request.question
-            })
-            answer_text = main_result['text']
+        main_result = main_chain.invoke({"context": context_with_metadata, "question": request.question})
+        answer_text = main_result['text']
+        
+        final_answer = answer_text
+        used_titles = {title for title, url in unique_sources_for_links.items() if title in answer_text}
+        
+        if used_titles:
+            final_answer += "\n\n---\n**Пов'язані документи:**"
+            for title in sorted(list(used_titles)):
+                url = unique_sources_for_links[title]
+                final_answer += f"\n* [{title}]({url})"
 
-            # --- КРОК 4: ДОДАВАННЯ ПОСИЛАНЬ (ВИПРАВЛЕНА ВЕРСІЯ) ---
-            final_answer = answer_text
-
-            # Знаходимо, які з унікальних джерел були згадані у відповіді
-            used_titles = {title for title, url in unique_sources_for_links.items() if title in answer_text}
-
-            # Якщо хоча б один документ був використаний, додаємо блок з посиланнями
-            if used_titles:
-                final_answer += "\n\n---\n**Пов'язані документи:**"
-                for title in sorted(list(used_titles)):
-                    url = unique_sources_for_links[title]
-                    # Додаємо посилання у форматі Markdown
-                    final_answer += f"\n* [{title}]({url})"
-
-            return {"answer": final_answer}
+        return {"answer": final_answer}
 
     except Exception as e:
         print(f"!!! ПОМИЛКА: {e} !!!")

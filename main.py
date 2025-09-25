@@ -39,7 +39,7 @@ DOCUMENT_TITLES = {
     "Agreement on Security Cooperation between Ukraine and the Republic of Lithuania.docx": "Угода про співробітництво у сфері безпеки між Україною та Литовською Республікою",
     "Agreement on Security Cooperation between Ukraine and the Republic of Poland.docx": "Угода про співробітництво у сфері безпеки між Україною та Республікою Польща",
     "Agreement on Support for Ukraine and Cooperation between Ukraine and Ireland.docx": "Угода про підтримку України та співробітництво між Україною та Ірландією",
-    "Agreement+on+Security+Cooperation+between+the+Netherlands+and+Ukraine.pdf": "Угода про співробітництво у сфері безпеки між Нідерландами та Україною",
+    "Agreement+on+Security+Cooperation+between+the+Netherlands+and+Ukraine.docx": "Угода про співробітництво у сфері безпеки між Нідерландами та Україною",
     "Bilateral security agreement between Ukraine and the United States of America.docx": "Двостороння безпекова угода між Україною та Сполученими Штатами Америки",
     "Joint Security Commitments between Ukraine and the European Union.docx": "Спільні безпекові зобов'язання між Україною та Європейським Союзом",
     "UK-Ukraine_Agreement_on_Security_Co-operation.pdf": "Угода про співробітництво у сфері безпеки між Україною та Сполученим Королівством Великої Британії і Північної Ірландії"
@@ -57,7 +57,7 @@ LLM_MODEL_CLASSIFY = "gpt-4o-mini"
 print("Завантаження ресурсів...")
 embeddings = OpenAIEmbeddings()
 vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
-retriever = vectorstore.as_retriever(search_kwargs={"k": 100}) 
+retriever = vectorstore.as_retriever(search_kwargs={"k": 150}) 
 reference_loader = Docx2txtLoader(os.path.join(DOCUMENTS_DIR, REFERENCE_FILE_NAME))
 reference_text = reference_loader.load()[0].page_content
 print("Ресурси завантажено.")

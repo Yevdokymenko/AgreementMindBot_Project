@@ -8,9 +8,7 @@ from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from langchain.retrievers import BM25Retriever, EnsembleRetriever
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import Docx2txtLoader
 
 load_dotenv()
 
@@ -55,29 +53,12 @@ DOCUMENTS_DIR = os.path.join(BASE_DIR, "documents")
 LLM_MODEL_MAIN = "gpt-4o"
 LLM_MODEL_CLASSIFY = "gpt-4o-mini"
 
-# --- ЗАВАНТАЖЕННЯ РЕСУРСІВ ТА СТВОРЕННЯ FUSION RETRIEVER ---
+# --- ЗАВАНТАЖЕННЯ РЕСУРСІВ ---
 print("Завантаження ресурсів...")
 embeddings = OpenAIEmbeddings()
 vectorstore = Chroma(persist_directory=VECTORSTORE_PATH, embedding_function=embeddings)
-
-all_docs_for_bm25 = []
-for file in os.listdir(DOCUMENTS_DIR):
-    file_path = os.path.join(DOCUMENTS_DIR, file)
-    try:
-        if file.endswith(".pdf"): loader = PyPDFLoader(file_path)
-        elif file.endswith(".docx"): loader = Docx2txtLoader(file_path)
-        else: continue
-        all_docs_for_bm25.extend(loader.load())
-    except Exception as e:
-        print(f"Помилка при завантаженні {file} для BM25: {e}")
-
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-split_docs = text_splitter.split_documents(all_docs_for_bm25)
-
-bm25_retriever = BM25Retriever.from_documents(split_docs)
-bm25_retriever.k = 25
-chroma_retriever = vectorstore.as_retriever(search_kwargs={"k": 25})
-ensemble_retriever = EnsembleRetriever(retrievers=[bm25_retriever, chroma_retriever], weights=[0.5, 0.5])
+# ЗБІЛЬШУЄМО ПОШУК ДО МАКСИМУМУ
+retriever = vectorstore.as_retriever(search_kwargs={"k": 100}) 
 
 reference_loader = Docx2txtLoader(os.path.join(DOCUMENTS_DIR, REFERENCE_FILE_NAME))
 reference_text = reference_loader.load()[0].page_content

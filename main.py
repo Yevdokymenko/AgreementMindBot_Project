@@ -119,6 +119,7 @@ class QueryRequest(BaseModel):
 @app.post("/query")
 def process_query(request: QueryRequest):
     try:
+        # --- КРОК 1: КЛАСИФІКАЦІЯ ---
         classification_result = classifier_chain.invoke({"question": request.question})
         classification = classification_result['text'].strip().lower()
 
@@ -133,13 +134,14 @@ def process_query(request: QueryRequest):
             """
             return {"answer": off_topic_response}
 
+        # --- КРОК 2: ФОРМУВАННЯ КОНТЕКСТУ ---
         context_with_metadata = ""
         unique_sources_for_links = {}
         
         if "general_listing" in classification:
             print("Стратегія: Загальний перелік. Використовую довідку + пошук.")
             context_with_metadata = f"--- Фрагмент ---\nНазва: Зведена довідка по безпекових угодах\nЗміст: {reference_text}\n\n"
-        else: # 'specific_question'
+        else:
             print(f"Стратегія: Конкретне питання. Використовую векторний пошук.")
 
         relevant_docs = retriever.invoke(request.question)
@@ -149,22 +151,29 @@ def process_query(request: QueryRequest):
             source_filename = os.path.basename(doc.metadata.get("source", "N/A"))
             doc_title = DOCUMENT_TITLES.get(source_filename, "Невідомий документ")
             
+            # Збираємо унікальні джерела для посилань
             if doc_title != "Невідомий документ" and "довідка" not in doc_title.lower():
                 slug = os.path.splitext(source_filename)[0].lower().replace(' ', '-').replace('+', '-')
                 url = f"https://agreementmindbot.win/agreements/{slug}/"
-                unique_sources_for_links[doc_title] = url
+                unique_sources_for_links[doc_title] = url # Використовуємо doc_title як ключ
             
             context_with_metadata += f"--- Фрагмент ---\nНазва: {doc_title}\nЗміст: {doc.page_content}\n\n"
         
-        main_result = main_chain.invoke({"context": context_with_metadata, "question": request.question})
+        # --- КРОК 3: ГЕНЕРАЦІЯ ВІДПОВІДІ ---
+        main_result = main_chain.invoke({
+            "context": context_with_metadata,
+            "question": request.question
+        })
         answer_text = main_result['text']
         
+        # --- КРОК 4: ДОДАВАННЯ ПОСИЛАНЬ (НАДІЙНА ВЕРСІЯ) ---
         final_answer = answer_text
-        used_titles = {title for title, url in unique_sources_for_links.items() if title in answer_text}
         
-        if used_titles:
+        # Якщо ми знайшли хоча б одне джерело (окрім довідки), додаємо блок з посиланнями
+        if unique_sources_for_links:
             final_answer += "\n\n---\n**Пов'язані документи:**"
-            for title in sorted(list(used_titles)):
+            # Сортуємо за назвою і додаємо посилання
+            for title in sorted(unique_sources_for_links.keys()):
                 url = unique_sources_for_links[title]
                 final_answer += f"\n* [{title}]({url})"
 
